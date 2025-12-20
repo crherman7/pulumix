@@ -1,0 +1,40 @@
+{
+  "name": "@pulumix/core",
+  "version": "0.0.0",
+  "description": "Core types, managers, and orchestrator for Pulumix",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@pulumi/pulumi": "^3.142.0",
+    "dependency-graph": "^1.0.0",
+    "fast-glob": "^3.3.3",
+    "jiti": "^2.6.1",
+    "purify-ts": "^2.1.0",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

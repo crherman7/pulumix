@@ -1,0 +1,26 @@
+{
+  "name": "hello-world-pulumix",
+  "version": "1.0.0",
+  "description": "Hello World example for Pulumix",
+  "private": true,
+  "scripts": {
+    "deploy": "pulumix deploy",
+    "destroy": "pulumix destroy"
+  },
+  "keywords": [
+    "pulumix",
+    "example",
+    "kubernetes"
+  ],
+  "dependencies": {
+    "@pulumix/cli": "workspace:*",
+    "@pulumix/core": "workspace:*",
+    "@pulumi/kubernetes": "^4.18.0"
+  },
+  "devDependencies": {
+    "@pulumi/pulumi": "^3.142.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
