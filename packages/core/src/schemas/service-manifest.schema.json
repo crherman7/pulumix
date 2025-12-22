@@ -1,0 +1,267 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pulumix.dev/schemas/service-manifest.json",
+  "title": "Pulumix Service Manifest",
+  "description": "Standard manifest for Pulumix federated services",
+  "type": "object",
+  "required": ["metadata", "stacks"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Service name (must match directory name)",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "version": {
+          "type": "string",
+          "description": "Service version (semver)",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+        },
+        "description": {
+          "type": "string",
+          "description": "Brief service description"
+        },
+        "team": {
+          "type": "string",
+          "description": "Owning team name"
+        },
+        "owner": {
+          "type": "string",
+          "description": "Service owner email",
+          "format": "email"
+        },
+        "repository": {
+          "type": "string",
+          "description": "Source code repository URL",
+          "format": "uri"
+        },
+        "documentation": {
+          "type": "string",
+          "description": "Documentation URL",
+          "format": "uri"
+        },
+        "tags": {
+          "type": "object",
+          "description": "Custom tags for categorization",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "sla": {
+          "type": "object",
+          "description": "Service level agreement",
+          "properties": {
+            "availability": {
+              "type": "string",
+              "description": "Target availability (e.g., '99.9%')",
+              "pattern": "^\\d+(\\.\\d+)?%$"
+            },
+            "responseTime": {
+              "type": "string",
+              "description": "Target response time (e.g., '200ms')"
+            },
+            "errorRate": {
+              "type": "string",
+              "description": "Maximum error rate (e.g., '0.1%')"
+            }
+          }
+        },
+        "support": {
+          "type": "object",
+          "description": "Support contact information",
+          "properties": {
+            "email": {
+              "type": "string",
+              "format": "email"
+            },
+            "slack": {
+              "type": "string",
+              "description": "Slack channel (e.g., '#platform-support')"
+            },
+            "pagerduty": {
+              "type": "string",
+              "description": "PagerDuty service name"
+            },
+            "oncall": {
+              "type": "string",
+              "description": "On-call rotation URL"
+            }
+          }
+        },
+        "contract": {
+          "type": "object",
+          "description": "Output contract versioning",
+          "required": ["version"],
+          "properties": {
+            "version": {
+              "type": "string",
+              "description": "Contract version (semver)",
+              "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+            },
+            "breaking": {
+              "type": "array",
+              "description": "Breaking changes in this version",
+              "items": {
+                "type": "string"
+              }
+            },
+            "deprecated": {
+              "type": "array",
+              "description": "Deprecated output fields",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string"
+                  },
+                  "since": {
+                    "type": "string"
+                  },
+                  "removeIn": {
+                    "type": "string"
+                  },
+                  "replacement": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "description": "Observability configuration",
+      "properties": {
+        "health": {
+          "type": "object",
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "default": "/health"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "scheme": {
+              "type": "string",
+              "enum": ["http", "https"],
+              "default": "http"
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "default": "/metrics"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "format": {
+              "type": "string",
+              "enum": ["prometheus", "opentelemetry"],
+              "default": "prometheus"
+            }
+          }
+        },
+        "logs": {
+          "type": "object",
+          "properties": {
+            "format": {
+              "type": "string",
+              "enum": ["json", "text"],
+              "default": "json"
+            },
+            "level": {
+              "type": "string",
+              "enum": ["debug", "info", "warn", "error"],
+              "default": "info"
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "description": "Security policies",
+      "properties": {
+        "networkPolicy": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "ingress": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "array"
+                  },
+                  "ports": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "egress": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "rbac": {
+          "type": "object",
+          "properties": {
+            "serviceAccount": {
+              "type": "string"
+            },
+            "roles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["kubernetes", "vault", "aws-secrets-manager", "azure-keyvault"]
+            },
+            "path": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "stacks": {
+      "type": "object",
+      "description": "Stack-specific configuration",
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  }
+}

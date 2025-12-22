@@ -7,12 +7,32 @@
  */
 
 import * as k8s from '@pulumi/kubernetes'
-import type { ServiceContext, ServiceResult } from '@pulumix/core'
+import { ServiceContext, ServiceResult } from '@pulumix/core'
 
-export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+/**
+ * Outputs provided by the ingress service
+ */
+export interface IngressOutputs {
+  /** Whether ingress was installed */
+  installed?: boolean
+  /** Whether ingress installation was skipped */
+  skipped?: boolean
+  /** Type of ingress controller (traefik, nginx) */
+  type?: string
+  /** Namespace where ingress is installed */
+  namespace?: string
+  /** Reason for skipping (if skipped) */
+  reason?: string
+}
+
+export default async (ctx: ServiceContext): Promise<ServiceResult<IngressOutputs>> => {
   const install = ctx.config.install as boolean
   const type = (ctx.config.type as string) || 'traefik'
   const replicas = (ctx.config.replicas as number) || 1
+  const namespace = (ctx.config.namespace as string) || (type === 'traefik' ? 'traefik-system' : 'ingress-nginx')
+  const helmRepo = (ctx.config.helmRepo as string) || (type === 'traefik' ? 'https://traefik.github.io/charts' : 'https://kubernetes.github.io/ingress-nginx')
+  const helmChart = (ctx.config.helmChart as string) || (type === 'traefik' ? 'traefik' : 'ingress-nginx')
+  const dashboardEnabled = (ctx.config.dashboardEnabled as boolean) ?? false
 
   // Skip if not installing (k3d has traefik built-in)
   if (!install) {
@@ -28,18 +48,18 @@ export default async (ctx: ServiceContext): Promise<ServiceResult> => {
   if (type === 'traefik') {
     // Install Traefik via Helm
     const traefik = new k8s.helm.v3.Chart('traefik', {
-      chart: 'traefik',
+      chart: helmChart,
       fetchOpts: {
-        repo: 'https://traefik.github.io/charts'
+        repo: helmRepo
       },
-      namespace: 'traefik-system',
+      namespace,
       values: {
         deployment: {
           replicas
         },
         ingressRoute: {
           dashboard: {
-            enabled: false
+            enabled: dashboardEnabled
           }
         }
       }
@@ -49,7 +69,7 @@ export default async (ctx: ServiceContext): Promise<ServiceResult> => {
       outputs: {
         installed: true,
         type: 'traefik',
-        namespace: 'traefik-system'
+        namespace
       },
       resources: [traefik]
     }
@@ -58,11 +78,11 @@ export default async (ctx: ServiceContext): Promise<ServiceResult> => {
   if (type === 'nginx') {
     // Install nginx-ingress via Helm
     const nginx = new k8s.helm.v3.Chart('nginx-ingress', {
-      chart: 'ingress-nginx',
+      chart: helmChart,
       fetchOpts: {
-        repo: 'https://kubernetes.github.io/ingress-nginx'
+        repo: helmRepo
       },
-      namespace: 'ingress-nginx',
+      namespace,
       values: {
         controller: {
           replicaCount: replicas
@@ -74,7 +94,7 @@ export default async (ctx: ServiceContext): Promise<ServiceResult> => {
       outputs: {
         installed: true,
         type: 'nginx',
-        namespace: 'ingress-nginx'
+        namespace
       },
       resources: [nginx]
     }

@@ -6,21 +6,54 @@
  */
 
 import * as k8s from '@pulumi/kubernetes'
-import type { ServiceContext, ServiceResult } from '@pulumix/core'
+import { ServiceContext, ServiceResult, getStandardLabels } from '@pulumix/core'
+import type { ProviderOutputs } from '../provider/pulumix'
+import type { IngressOutputs } from '../ingress/pulumix'
 
-export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+/**
+ * Dependencies required by hello-world service
+ */
+interface HelloWorldDependencies {
+  provider: ProviderOutputs
+  ingress: IngressOutputs
+}
+
+/**
+ * Outputs provided by hello-world service
+ */
+export interface HelloWorldOutputs {
+  /** Namespace where service is deployed */
+  namespace: string
+  /** Hostname for accessing the service */
+  hostname: string
+  /** Full URL for accessing the service */
+  url: string
+}
+
+export default async (ctx: ServiceContext<HelloWorldDependencies>): Promise<ServiceResult<HelloWorldOutputs>> => {
   const name = ctx.serviceName
   const namespace = ctx.namespace
-  const labels = { 'app.kubernetes.io/name': name }
+
+  // Access typed dependencies (with intellisense!)
+  // const providerRegistry = ctx.dependencies.provider.registry
+  // const ingressNamespace = ctx.dependencies.ingress.namespace
+
+  // Get observability config from manifest
+  const port = ctx.observability?.health?.port || 3000
+  const healthEndpoint = ctx.observability?.health?.endpoint || '/health'
 
   // Get stack-scoped config from deploy.yaml
-  const port = (ctx.config.port as number) || 3000
   const replicas = (ctx.config.replicas as number) || 1
   const env = (ctx.config.env as Record<string, string>) || {}
+  const baseDomain = (ctx.config.baseDomain as string) || '127.0.0.1.sslip.io'
+  const ingressClassName = (ctx.config.ingressClassName as string) || 'traefik'
+  const imagePullPolicy = (ctx.config.imagePullPolicy as string) || 'Always'
 
-  // Default ingress settings for k3d
-  const baseDomain = '127.0.0.1.sslip.io'
-  const ingressClassName = 'traefik'
+  // Generate standard Kubernetes labels (uses metadata.version)
+  const labels = getStandardLabels(ctx, {
+    version: ctx.metadata.version,
+    component: 'api'
+  })
 
   // Create namespace
   const ns = new k8s.core.v1.Namespace(namespace, {
@@ -42,16 +75,18 @@ export default async (ctx: ServiceContext): Promise<ServiceResult> => {
           containers: [{
             name,
             image,
-            imagePullPolicy: 'Always',
+            imagePullPolicy,
             ports: [{ containerPort: port }],
             env: Object.entries(env).map(([k, v]) => ({ name: k, value: String(v) })),
             livenessProbe: {
-              httpGet: { path: '/health', port },
-              initialDelaySeconds: 10
+              httpGet: { path: healthEndpoint, port },
+              initialDelaySeconds: 10,
+              periodSeconds: 10
             },
             readinessProbe: {
-              httpGet: { path: '/health', port },
-              initialDelaySeconds: 5
+              httpGet: { path: healthEndpoint, port },
+              initialDelaySeconds: 5,
+              periodSeconds: 5
             }
           }]
         }

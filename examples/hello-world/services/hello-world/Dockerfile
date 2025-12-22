@@ -3,11 +3,11 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy application package files (from src/)
+COPY src/package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN npm install --production
 
 # Production stage
 FROM node:18-alpine
@@ -27,7 +27,6 @@ COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
 
 # Copy application code
 COPY --chown=nodejs:nodejs src ./src
-COPY --chown=nodejs:nodejs package.json ./
 
 # Switch to non-root user
 USER nodejs

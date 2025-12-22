@@ -1,7 +1,13 @@
 # Provider Service
 # Sets up the Kubernetes cluster/provider
 
-name: provider
+metadata:
+  name: provider
+  version: 1.0.0
+  description: Kubernetes cluster provider service
+  team: platform
+  contract:
+    version: 1.0.0
 
 stacks:
   local:

@@ -1,0 +1,16 @@
+# Pulumix Project Configuration
+
+name: hello-world
+
+# Security: allowlist for published services
+services:
+  allowed:
+    - "@platform/*"
+    - "@hello-world/*"
+
+stacks:
+  local:
+    namespace: hello-world
+
+  production:
+    namespace: hello-world-prod
