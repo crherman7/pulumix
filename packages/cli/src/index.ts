@@ -7,8 +7,13 @@
 
 import { Command } from 'commander'
 import * as path from 'path'
-import { Orchestrator, createEventEmitter } from '@pulumix/core'
-import { createEventBus, createUIShell } from './ui'
+import { Orchestrator, createEventEmitter, formatError } from '@pulumix/core'
+import { createEventBus, createUIShell, DeploymentConfig } from './ui'
+import { pulumiLogger } from './ui/logger'
+import { listCommand } from './commands/list'
+import { validateCommand } from './commands/validate'
+import { inspectCommand } from './commands/inspect'
+import { graphCommand } from './commands/graph'
 import chalk from 'chalk'
 
 /**
@@ -44,6 +49,15 @@ async function deployCommand(
     console.log(chalk.bold(`pulumix deploy ${chalk.cyan(stackName)}`))
     console.log(chalk.dim(rootPath))
 
+    // Set deployment config for pre-deployment summary
+    const config: DeploymentConfig = {
+      stackName,
+      environment: stackName,
+      services: [], // Will be populated during discovery
+      rootPath
+    }
+    ui.setDeploymentConfig(config)
+
     // Create orchestrator
     const orchestrator = new Orchestrator(orchestratorEvents)
 
@@ -61,31 +75,37 @@ async function deployCommand(
       .deploy({
         rootPath,
         stackName,
-        servicesToDeploy
+        servicesToDeploy,
+        onOutput: pulumiLogger
       })
       .run()
 
     if (result.isLeft()) {
       const error = result.extract()
-      ui.error(`Deployment failed: ${error.message}`)
-      if (options.verbose && error.context) {
-        console.error(chalk.dim(JSON.stringify(error.context, null, 2)))
+      const formatted = formatError(error)
+      console.error('')
+      console.error(chalk.red(formatted))
+
+      if (options.verbose && error.cause) {
+        console.error('')
+        console.error(chalk.dim('Caused by:'))
+        console.error(chalk.dim(error.cause.stack || error.cause.message))
       }
+
       process.exit(1)
     }
 
     const deployResult = result.unsafeCoerce()
 
-    if (deployResult.success) {
-      console.log('')
-      console.log(chalk.bold('Summary'))
-      console.log(`  ${chalk.green('✓')} Deployment completed`)
-      console.log(`  ${chalk.dim('•')} Stack: ${chalk.cyan(deployResult.stack)}`)
-      console.log(`  ${chalk.dim('•')} Services: ${chalk.green(deployResult.servicesDeployed)} deployed`)
-      console.log(`  ${chalk.dim('•')} Duration: ${(deployResult.duration / 1000).toFixed(1)}s`)
-      console.log('')
-    } else {
-      ui.error('Deployment completed with errors')
+    // Print final summary
+    ui.printFinalSummary({
+      success: deployResult.success,
+      stack: deployResult.stack,
+      servicesDeployed: deployResult.servicesDeployed,
+      duration: deployResult.duration
+    })
+
+    if (!deployResult.success) {
       process.exit(1)
     }
   } catch (err: any) {
@@ -146,16 +166,23 @@ async function destroyCommand(
     const result = await orchestrator
       .destroy({
         rootPath,
-        stackName
+        stackName,
+        onOutput: pulumiLogger
       })
       .run()
 
     if (result.isLeft()) {
       const error = result.extract()
-      ui.error(`Destroy failed: ${error.message}`)
-      if (options.verbose && error.context) {
-        console.error(chalk.dim(JSON.stringify(error.context, null, 2)))
+      const formatted = formatError(error)
+      console.error('')
+      console.error(chalk.red(formatted))
+
+      if (options.verbose && error.cause) {
+        console.error('')
+        console.error(chalk.dim('Caused by:'))
+        console.error(chalk.dim(error.cause.stack || error.cause.message))
       }
+
       process.exit(1)
     }
 
@@ -214,6 +241,40 @@ function main(): void {
     .option('-y, --yes', 'Skip confirmation prompt', false)
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(destroyCommand)
+
+  // List command
+  program
+    .command('list')
+    .description('List all discovered services')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('-v, --verbose', 'Show detailed information', false)
+    .option('--json', 'Output as JSON', false)
+    .action(listCommand)
+
+  // Validate command
+  program
+    .command('validate')
+    .description('Validate service configurations')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('-v, --verbose', 'Show detailed errors', false)
+    .action(validateCommand)
+
+  // Inspect command
+  program
+    .command('inspect')
+    .description('Show detailed information about a service')
+    .argument('<service>', 'Service name to inspect')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('--json', 'Output as JSON', false)
+    .action(inspectCommand)
+
+  // Graph command
+  program
+    .command('graph')
+    .description('Visualize service dependency graph')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('-f, --format <format>', 'Output format: tree, dot, mermaid', 'tree')
+    .action(graphCommand)
 
   // Parse arguments
   program.parse()

@@ -9,10 +9,14 @@
       "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
       "import": "./dist/index.mjs"
+    },
+    "./schema": {
+      "default": "./src/schemas/service-manifest.schema.json"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src/schemas"
   ],
   "scripts": {
     "build": "tsc --build",
@@ -23,14 +27,19 @@
   },
   "dependencies": {
     "@pulumi/pulumi": "^3.142.0",
-    "dependency-graph": "^1.0.0",
+    "@types/dockerode": "^3.3.47",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "dockerode": "^4.0.9",
     "fast-glob": "^3.3.3",
     "jiti": "^2.6.1",
     "purify-ts": "^2.1.0",
+    "tar-fs": "^3.1.1",
     "yaml": "^2.6.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/tar-fs": "^2.0.4",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

@@ -16,7 +16,13 @@ import { Either, Left, Right } from 'purify-ts/Either'
 import { Maybe, Just, Nothing } from 'purify-ts/Maybe'
 import { createJiti } from 'jiti'
 import * as yaml from 'yaml'
-import { createDeploymentError, createBuildError, DeployError } from '../types/errors'
+import {
+  createDeploymentError,
+  createDiscoveryError,
+  createConfigError,
+  DeployError
+} from '../types/errors'
+import { validateServiceManifest } from '../validation/manifest'
 import { OrchestratorEventEmitter, createEventEmitter } from './events'
 import {
   DiscoveredService,
@@ -26,6 +32,13 @@ import {
 } from '../types/service'
 import type { ServiceMetadata, ObservabilityConfig, SecurityConfig } from '../types/manifest'
 import { LocalWorkspace } from '@pulumi/pulumi/automation'
+import {
+  buildImage,
+  pushImage,
+  hashBuildContext,
+  imageExistsInRegistry,
+  getImageDigestFromRegistry
+} from '../docker'
 
 // Create jiti instance for loading TypeScript files at runtime
 const jiti = createJiti(__filename, {
@@ -43,6 +56,8 @@ export interface OrchestratorConfig {
   readonly rootPath: string
   readonly stackName: string
   readonly servicesToDeploy?: readonly string[]
+  /** Optional callback for Pulumi output - pass your logger function here */
+  readonly onOutput?: (message: string) => void
 }
 
 /**
@@ -103,11 +118,12 @@ const parseYamlFile = (filePath: string): Either<DeployError, Record<string, unk
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return Left(
-      createDeploymentError(
-        'ValidationFailed',
+      createDiscoveryError(
+        'InvalidYaml',
         `Failed to parse YAML file ${filePath}: ${message}`,
-        undefined,
-        { filePath }
+        filePath,
+        { filePath, parseError: message },
+        err instanceof Error ? err : undefined
       )
     )
   }
@@ -212,6 +228,13 @@ export const discoverServices = async (rootPath: string): Promise<Either<DeployE
       }
 
       const rawConfig = configResult.unsafeCoerce()
+
+      // Validate manifest against schema
+      const validationResult = validateServiceManifest(rawConfig, configPath)
+      if (validationResult.isLeft()) {
+        return validationResult as Either<DeployError, never>
+      }
+
       const metadata = parseServiceMetadata(rawConfig, path.basename(servicePath))
 
       serviceNames.add(metadata.name)
@@ -261,11 +284,12 @@ export const discoverServices = async (rootPath: string): Promise<Either<DeployE
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return Left(
-      createDeploymentError(
-        'ValidationFailed',
+      createDiscoveryError(
+        'InvalidGlobPattern',
         `Failed to discover services: ${message}`,
-        undefined,
-        { rootPath }
+        rootPath,
+        { rootPath },
+        err instanceof Error ? err : undefined
       )
     )
   }
@@ -336,6 +360,13 @@ export const discoverPublishedServices = async (
       }
 
       const rawConfig = configResult.unsafeCoerce()
+
+      // Validate manifest against schema
+      const validationResult = validateServiceManifest(rawConfig, configPath)
+      if (validationResult.isLeft()) {
+        return validationResult as Either<DeployError, never>
+      }
+
       const metadata = parseServiceMetadata(rawConfig, path.basename(servicePath))
 
       serviceNames.add(metadata.name)
@@ -390,11 +421,12 @@ export const discoverPublishedServices = async (
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return Left(
-      createDeploymentError(
-        'ValidationFailed',
+      createDiscoveryError(
+        'InvalidGlobPattern',
         `Failed to discover published services: ${message}`,
-        undefined,
-        { rootPath }
+        rootPath,
+        { rootPath, allowlist },
+        err instanceof Error ? err : undefined
       )
     )
   }
@@ -465,33 +497,68 @@ const filterServices = (
 // ============================================================================
 
 /**
- * Run a shell command safely with spawn
+ * Run command with streaming progress updates (async)
  */
-const runCommand = (
+const runCommandWithProgress = (
   command: string,
   args: readonly string[],
-  options?: { stdio?: 'pipe' | 'inherit'; cwd?: string }
-): Either<DeployError, string> => {
-  const result = spawnSync(command, args as string[], {
-    stdio: options?.stdio ?? 'pipe',
-    cwd: options?.cwd,
-    encoding: 'utf-8'
+  onProgress: (line: string) => void,
+  options?: { cwd?: string }
+): Promise<Either<DeployError, string>> => {
+  return new Promise((resolve) => {
+    const { spawn } = require('child_process')
+    const proc = spawn(command, args as string[], {
+      cwd: options?.cwd,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    // Stream stdout line by line
+    proc.stdout.on('data', (data: Buffer) => {
+      const text = data.toString()
+      stdout += text
+
+      const lines = text.split('\n')
+      for (const line of lines) {
+        if (line.trim()) {
+          onProgress(line.trim())
+        }
+      }
+    })
+
+    // Capture stderr
+    proc.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString()
+    })
+
+    proc.on('close', (code: number) => {
+      if (code !== 0) {
+        resolve(Left(
+          createDeploymentError(
+            'PulumiFailed',
+            `Command failed: ${command} ${args.join(' ')}\n${stderr || stdout}`,
+            undefined,
+            { exitCode: code }
+          )
+        ))
+      } else {
+        resolve(Right(stdout))
+      }
+    })
+
+    proc.on('error', (err: Error) => {
+      resolve(Left(
+        createDeploymentError(
+          'PulumiFailed',
+          `Command error: ${command} ${args.join(' ')}\n${err.message}`,
+          undefined,
+          { error: err }
+        )
+      ))
+    })
   })
-
-  if (result.status !== 0) {
-    const stderr = result.stderr?.toString() ?? ''
-    const stdout = result.stdout?.toString() ?? ''
-    return Left(
-      createDeploymentError(
-        'PulumiFailed',
-        `Command failed: ${command} ${args.join(' ')}\n${stderr || stdout}`,
-        undefined,
-        { exitCode: result.status }
-      )
-    )
-  }
-
-  return Right(result.stdout?.toString() ?? '')
 }
 
 /**
@@ -522,11 +589,12 @@ const clusterExists = (clusterName: string): boolean => {
 /**
  * Create k3d cluster with registry
  */
-const createK3dCluster = (
+const createK3dCluster = async (
   clusterName: string,
   registryPort: number,
-  port: number
-): Either<DeployError, void> => {
+  port: number,
+  eventEmitter: OrchestratorEventEmitter
+): Promise<Either<DeployError, void>> => {
   // Validate inputs to prevent command injection
   if (!isValidShellArg(clusterName)) {
     return Left(
@@ -554,7 +622,20 @@ const createK3dCluster = (
     '--wait'
   ]
 
-  return runCommand('k3d', args, { stdio: 'inherit' }).map(() => undefined)
+  // Create cluster with streaming progress
+  const result = await runCommandWithProgress(
+    'k3d',
+    args,
+    (line) => {
+      // Emit k3d progress messages
+      if (line.includes('Creating') || line.includes('Starting') || line.includes('Waiting') || line.includes('Successfully')) {
+        eventEmitter.emitTaskUpdate(clusterName, line)
+      }
+    },
+    { cwd: undefined }
+  )
+
+  return result.map(() => undefined)
 }
 
 // ============================================================================
@@ -562,75 +643,116 @@ const createK3dCluster = (
 // ============================================================================
 
 /**
- * Build and push Docker image for a service
+ * Build result with skip information
  */
-const buildAndPushImage = (
+interface BuildImageResult {
+  /** Image reference (registry/name@digest or registry/name:tag) */
+  imageRef: string
+  /** Whether the build was skipped (image already existed) */
+  skipped: boolean
+  /** Content hash used for caching */
+  contentHash: string
+}
+
+/**
+ * Build and push Docker image for a service with content-based caching
+ *
+ * Uses content hashing to skip builds when source files haven't changed.
+ * The content hash is used as the image tag for cache lookup.
+ */
+const buildAndPushImage = async (
   service: DiscoveredService,
   registry: string,
   eventEmitter: OrchestratorEventEmitter
-): Either<DeployError, string | undefined> => {
+): Promise<Either<DeployError, BuildImageResult | undefined>> => {
   if (!service.hasDockerfile) {
     return Right(undefined)
   }
 
-  // Validate registry to prevent injection
-  if (!isValidShellArg(registry)) {
-    return Left(
-      createBuildError(
-        'DockerBuildFailed',
-        `Invalid registry name: ${registry}`,
-        service.name
-      )
-    )
+  // Compute content hash of build context
+  const contentHash = await hashBuildContext(service.path)
+  const imageTag = `${registry}/${service.name}:${contentHash}`
+
+  // Check if image with this hash already exists in registry
+  const exists = await imageExistsInRegistry(registry, service.name, contentHash)
+
+  if (exists) {
+    // Image exists - get its digest and skip build
+    const digest = await getImageDigestFromRegistry(registry, service.name, contentHash)
+
+    if (digest) {
+      eventEmitter.emitTaskUpdate(service.name, `unchanged (${contentHash})`)
+      return Right({
+        imageRef: `${registry}/${service.name}@${digest}`,
+        skipped: true,
+        contentHash
+      })
+    }
+
+    // Fallback to tag if digest not available
+    eventEmitter.emitTaskUpdate(service.name, `unchanged (${contentHash})`)
+    return Right({
+      imageRef: imageTag,
+      skipped: true,
+      contentHash
+    })
   }
 
-  if (!isValidShellArg(service.name)) {
-    return Left(
-      createBuildError(
-        'DockerBuildFailed',
-        `Invalid service name: ${service.name}`,
-        service.name
-      )
-    )
-  }
+  // Image doesn't exist - build and push
+  eventEmitter.emitTaskUpdate(service.name, `building (${contentHash})`)
 
-  const imageTag = `${registry}/${service.name}:latest`
+  // Build the image using Docker SDK
+  const buildResult = await buildImage({
+    contextPath: service.path,
+    tag: imageTag,
+    onProgress: (progress) => {
+      if (progress.current && progress.total) {
+        eventEmitter.emitTaskUpdate(
+          service.name,
+          progress.message,
+          (progress.current / progress.total) * 100
+        )
+      } else {
+        eventEmitter.emitTaskUpdate(service.name, progress.message)
+      }
+    }
+  })
 
-  eventEmitter.emitLog('info', `Building ${service.name}...`, undefined, 'Build')
-
-  // Build the image
-  const buildResult = runCommand('docker', ['build', '-t', imageTag, service.path])
   if (buildResult.isLeft()) {
-    const error = buildResult.extract() as DeployError
-    eventEmitter.emitLog('warn', `Failed to build ${service.name}: ${error.message}`, undefined, 'Build')
-    return Left(
-      createBuildError(
-        'DockerBuildFailed',
-        error.message,
-        service.name
-      )
-    )
+    return buildResult
   }
 
-  eventEmitter.emitLog('info', `Pushing ${service.name}...`, undefined, 'Build')
+  // Push to registry using Docker SDK
+  const pushResult = await pushImage({
+    tag: imageTag,
+    onProgress: (progress) => {
+      const msg = progress.id
+        ? `${progress.status} ${progress.id}${progress.progress ? ` (${progress.progress}%)` : ''}`
+        : progress.status
+      eventEmitter.emitTaskUpdate(service.name, msg)
+    }
+  })
 
-  // Push to registry
-  const pushResult = runCommand('docker', ['push', imageTag])
   if (pushResult.isLeft()) {
-    const error = pushResult.extract() as DeployError
-    eventEmitter.emitLog('warn', `Failed to push ${service.name}: ${error.message}`, undefined, 'Build')
-    return Left(
-      createBuildError(
-        'DockerPushFailed',
-        error.message,
-        service.name
-      )
-    )
+    return pushResult
   }
 
-  eventEmitter.emitLog('info', `✓ ${service.name} → ${imageTag}`, undefined, 'Build')
+  // Use digest-based reference for guaranteed image matching
+  const push = pushResult.extract() as { tag: string; digest?: string }
+  if (push.digest) {
+    return Right({
+      imageRef: `${registry}/${service.name}@${push.digest}`,
+      skipped: false,
+      contentHash
+    })
+  }
 
-  return Right(imageTag)
+  // Fallback to tag if no digest available
+  return Right({
+    imageRef: imageTag,
+    skipped: false,
+    contentHash
+  })
 }
 
 // ============================================================================
@@ -649,11 +771,12 @@ const loadDeployFunction = async (
 
     if (typeof deployFn !== 'function') {
       return Left(
-        createDeploymentError(
-          'ValidationFailed',
+        createConfigError(
+          'InvalidConfigFormat',
           `${service.deployPath} must export a default function`,
           undefined,
-          { serviceName: service.name }
+          'default',
+          { serviceName: service.name, deployPath: service.deployPath }
         )
       )
     }
@@ -662,11 +785,13 @@ const loadDeployFunction = async (
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return Left(
-      createDeploymentError(
-        'ValidationFailed',
+      createConfigError(
+        'InvalidConfigFormat',
         `Failed to load deploy function from ${service.name}: ${message}`,
         undefined,
-        { serviceName: service.name, deployPath: service.deployPath }
+        'deployPath',
+        { serviceName: service.name, deployPath: service.deployPath },
+        err instanceof Error ? err : undefined
       )
     )
   }
@@ -697,9 +822,12 @@ export class Orchestrator {
     // Check passphrase for production
     if (stackName === 'production' && !process.env.PULUMI_CONFIG_PASSPHRASE) {
       return Left(
-        createDeploymentError(
-          'ValidationFailed',
-          'PULUMI_CONFIG_PASSPHRASE environment variable is required for production deployments'
+        createConfigError(
+          'MissingRequiredField',
+          'PULUMI_CONFIG_PASSPHRASE environment variable is required for production deployments',
+          stackName,
+          'PULUMI_CONFIG_PASSPHRASE',
+          { stackName, envVar: 'PULUMI_CONFIG_PASSPHRASE' }
         )
       )
     }
@@ -728,9 +856,6 @@ export class Orchestrator {
       const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as RootConfig
       const stacks = rootConfig.stacks ?? {}
       const globalConfig = (stacks[config.stackName] as Record<string, unknown>) ?? {}
-
-      this.eventEmitter.emitLog('info', `Project: ${rootConfig.name ?? 'unnamed'}`, undefined, 'Configuration')
-      this.eventEmitter.emitLog('info', `Stack: ${config.stackName}`, undefined, 'Configuration')
       this.eventEmitter.emitPhaseComplete('configuration')
 
       // Phase 2: Discover services
@@ -738,12 +863,10 @@ export class Orchestrator {
 
       // Discover local services
       const localServices = await liftEither(await discoverServices(config.rootPath))
-      this.eventEmitter.emitLog('info', `Found ${localServices.length} local service(s)`, undefined, 'Discovery')
 
       // Discover published services (from node_modules)
       const allowlist = rootConfig.services?.allowed ?? []
       const publishedServices = await liftEither(await discoverPublishedServices(config.rootPath, allowlist))
-      this.eventEmitter.emitLog('info', `Found ${publishedServices.length} published service(s)`, undefined, 'Discovery')
 
       // Merge services (local overrides published if name conflicts)
       const localServiceNames = new Set(localServices.map(s => s.name))
@@ -754,9 +877,13 @@ export class Orchestrator {
 
       const services = filterServices(mergedServices, config.servicesToDeploy)
 
-      for (const service of services) {
+      // Show discovered services in tree format
+      for (let i = 0; i < services.length; i++) {
+        const service = services[i]
+        const isLast = i === services.length - 1
+        const prefix = isLast ? '└─' : '├─'
         const source = localServiceNames.has(service.name) ? 'local' : 'published'
-        this.eventEmitter.emitLog('info', `${service.name} (${source})`, undefined, 'Discovery')
+        this.eventEmitter.emitLog('info', `${prefix} ${service.name} (${source})`, undefined, 'Discovery')
       }
       this.eventEmitter.emitPhaseComplete('discovery')
 
@@ -805,14 +932,22 @@ export class Orchestrator {
         const registryPort = k3dConfig.registryPort ?? 5001
 
         if (clusterExists(clusterName)) {
-          this.eventEmitter.emitLog('info', `Cluster '${clusterName}' ready`, undefined, 'Bootstrap')
+          // Cluster already exists - emit as skipped/unchanged
+          this.eventEmitter.emitTaskStart(clusterName)
+          this.eventEmitter.emitTaskComplete(clusterName, true, true)  // skipped=true
         } else {
-          this.eventEmitter.emitLog('info', `Creating cluster '${clusterName}'...`, undefined, 'Bootstrap')
-          const createResult = createK3dCluster(clusterName, registryPort, port)
+          // Emit task start
+          this.eventEmitter.emitTaskStart(clusterName)
+
+          const createResult = await createK3dCluster(clusterName, registryPort, port, this.eventEmitter)
+
+          // Emit task complete
+          const success = createResult.isRight()
+          this.eventEmitter.emitTaskComplete(clusterName, success)
+
           if (createResult.isLeft()) {
             throw throwE(createResult.extract() as DeployError)
           }
-          this.eventEmitter.emitLog('info', `Cluster '${clusterName}' created`, undefined, 'Bootstrap')
         }
 
         this.eventEmitter.emitPhaseComplete('bootstrap')
@@ -825,17 +960,26 @@ export class Orchestrator {
         this.eventEmitter.emitPhaseStart('image-build')
 
         for (const service of servicesToBuild) {
-          const buildResult = buildAndPushImage(service, hostRegistry, this.eventEmitter)
+          // Emit task start for spinner
+          this.eventEmitter.emitTaskStart(service.name)
+
+          const buildResult = await buildAndPushImage(service, hostRegistry, this.eventEmitter)
 
           if (buildResult.isLeft()) {
             // Log warning but continue - some services might not need images
             const error = buildResult.extract() as DeployError
+            this.eventEmitter.emitTaskComplete(service.name, false)
             this.eventEmitter.emitLog('warn', error.message, undefined, 'Build')
           } else {
-            const imageTag = buildResult.unsafeCoerce()
-            if (imageTag) {
-              // Store cluster registry URL for k8s deployment
-              builtImages[service.name] = `${clusterRegistry}/${service.name}:latest`
+            const result = buildResult.unsafeCoerce()
+            if (result) {
+              // Replace host registry with cluster registry, preserving digest if present
+              // e.g., localhost:5001/service@sha256:abc -> k3d-registry:5001/service@sha256:abc
+              const imageWithoutRegistry = result.imageRef.replace(`${hostRegistry}/`, '')
+              builtImages[service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
+
+              // Emit task complete with content hash for display
+              this.eventEmitter.emitTaskComplete(service.name, true, result.skipped, result.contentHash)
             }
           }
         }
@@ -906,10 +1050,10 @@ export class Orchestrator {
         }
       )
 
+      // Simple approach: just use onOutput with the provided logger
+      // The logger (from CLI) handles all parsing and display
       await stack.up({
-        onOutput: (output) => {
-          this.eventEmitter.emitLog('info', output, undefined, 'Deploy')
-        }
+        onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
       })
 
       this.eventEmitter.emitPhaseComplete('deployment')
@@ -973,10 +1117,9 @@ export class Orchestrator {
         }
       )
 
+      // Simple approach: just use onOutput with the provided logger
       await stack.destroy({
-        onOutput: (output) => {
-          this.eventEmitter.emitLog('info', output, undefined, 'Deploy')
-        }
+        onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
       })
 
       return {

@@ -9,9 +9,17 @@
  */
 
 import chalk from 'chalk'
+import cliSpinners from 'cli-spinners'
+import logUpdate from 'ansi-diff'
 import { DeploymentEventBus } from './streams/event-bus'
 import { PhaseName } from '@pulumix/core'
-import { createLogger, Logger } from './logger'
+import {
+  DeploymentConfig,
+  PhaseMetric,
+  DeploymentResult,
+  formatDeploymentConfig,
+  formatFinalSummary
+} from './formatters'
 
 export interface UIShellConfig {
   readonly verbose?: boolean
@@ -26,7 +34,7 @@ const SECTION_NAMES: Record<PhaseName, string> = {
   'Discovery': 'Discovery',
   'Configuration': 'Configuration',
   'DependencyGraph': 'Dependencies',
-  'Bootstrap': 'Bootstrap',
+  'Bootstrap': 'Cluster',
   'Secrets': 'Secrets',
   'Build': 'Build',
   'Deploy': 'Deploy',
@@ -60,16 +68,139 @@ const isCompleteStatus = (status: string): boolean => {
   return complete.includes(status.toLowerCase())
 }
 
+// ============================================================================
+// Build Task Spinner (inline, simple approach)
+// ============================================================================
+
+interface BuildTask {
+  id: string
+  label: string       // Original task name (e.g., "hello-world")
+  status: string      // Current status message (e.g., "Step 1/5: FROM node")
+  phase: string
+  startTime: number
+  spinnerFrame: number
+}
+
+const createBuildTaskSpinner = () => {
+  const tasks = new Map<string, BuildTask>()
+  let interval: NodeJS.Timeout | null = null
+
+  const updater = logUpdate({
+    height: process.stdout.rows,
+    width: process.stdout.columns,
+  })
+
+  process.stdout.on('resize', () => {
+    updater.resize({ width: process.stdout.columns, height: process.stdout.rows })
+  })
+
+  const getSpinnerFrame = (frame: number): string =>
+    cliSpinners.dots.frames[frame % cliSpinners.dots.frames.length] ?? ''
+
+  // Truncate long strings (like SHA hashes)
+  const truncate = (str: string, maxLen: number = 40): string => {
+    if (str.length <= maxLen) return str
+    // For SHA hashes, show first 12 chars
+    if (str.includes('sha256:')) {
+      return str.replace(/sha256:[a-f0-9]+/g, (match) => match.slice(0, 19) + '...')
+    }
+    return str.slice(0, maxLen - 3) + '...'
+  }
+
+  const render = (): void => {
+    const lines: string[] = []
+    for (const task of tasks.values()) {
+      const frame = getSpinnerFrame(task.spinnerFrame)
+      const elapsed = ((Date.now() - task.startTime) / 1000).toFixed(1)
+      const statusText = task.status ? ` ${chalk.dim(truncate(task.status))}` : ''
+      lines.push(`  ${chalk.green(frame)} ${task.label}${statusText} ${chalk.dim(`(${elapsed}s)`)}`)
+      task.spinnerFrame++
+    }
+
+    if (lines.length > 0) {
+      if (process.stdout.isTTY) {
+        process.stdout.write('\u001B[?25l') // hide cursor
+      }
+      process.stdout.write(updater.update(lines.join('\n')))
+    }
+  }
+
+  const clear = (): void => {
+    process.stdout.write(updater.update(''))
+  }
+
+  const showCursor = (): void => {
+    if (process.stdout.isTTY) {
+      process.stdout.write('\u001B[?25h')
+    }
+  }
+
+  return {
+    start: (id: string, label: string, phase: string): void => {
+      tasks.set(id, { id, label, status: '', phase, startTime: Date.now(), spinnerFrame: 0 })
+
+      if (!interval) {
+        interval = setInterval(render, cliSpinners.dots.interval)
+      }
+    },
+
+    update: (id: string, status: string): void => {
+      const task = tasks.get(id)
+      if (task) {
+        task.status = status
+      }
+    },
+
+    complete: (id: string, success: boolean, skipped?: boolean, contentHash?: string): { duration: number } | null => {
+      const task = tasks.get(id)
+      if (!task) return null
+
+      const duration = Date.now() - task.startTime
+      tasks.delete(id)
+
+      // If no more tasks, stop interval and clear
+      if (tasks.size === 0 && interval) {
+        clearInterval(interval)
+        interval = null
+        clear()
+      }
+
+      // Print completion line with label and hash
+      const icon = success ? chalk.green('+') : chalk.red('-')
+      const statusText = skipped ? chalk.bold.dim('unchanged') : chalk.bold.green('created')
+      const hashText = contentHash ? ` ${chalk.dim(`(${contentHash})`)}` : ''
+      console.log(`  ${icon} ${task.label}${hashText} ${statusText} ${chalk.dim(`(${(duration / 1000).toFixed(1)}s)`)}`)
+
+      return { duration }
+    },
+
+    cleanup: (): void => {
+      if (interval) {
+        clearInterval(interval)
+        interval = null
+      }
+      clear()
+      showCursor()
+    }
+  }
+}
+
+// ============================================================================
+// UIShell
+// ============================================================================
+
 export class UIShell {
   private readonly eventBus: DeploymentEventBus
   private readonly config: UIShellConfig
-  private readonly logger: Logger
+  private readonly buildSpinner: ReturnType<typeof createBuildTaskSpinner>
   private unsubscribers: Array<() => void> = []
   private phaseStartTimes: Map<PhaseName, number> = new Map()
   private sectionPrinted: Set<PhaseName> = new Set()
   private resourceCounts: Map<string, number> = new Map()
   private seenResources: Set<string> = new Set()
   private taskPhases: Map<string, PhaseName> = new Map()
+  private deploymentConfig?: DeploymentConfig
+  private phaseMetrics: Map<PhaseName, PhaseMetric> = new Map()
 
   constructor(eventBus: DeploymentEventBus, config?: UIShellConfig) {
     this.eventBus = eventBus
@@ -80,12 +211,8 @@ export class UIShell {
       ...config
     }
 
-    // Create logger with dynamic/static mode based on TTY
-    this.logger = createLogger({
-      isTTY: this.config.interactive ?? process.stdout.isTTY ?? false,
-      isCI: process.env.CI === 'true',
-      isInteractive: process.env.IS_INTERACTIVE !== 'false'
-    })
+    // Create build spinner only in dynamic mode
+    this.buildSpinner = createBuildTaskSpinner()
 
     this.setupEventListeners()
   }
@@ -141,26 +268,8 @@ export class UIShell {
 
     if (phase === 'Outputs') return
 
-    // For Deploy phase, print resource summary
+    // Deploy phase output is handled by pulumiLogger via onOutput, skip here
     if (phase === 'Deploy') {
-      const created = this.resourceCounts.get('created') || 0
-      const updated = this.resourceCounts.get('updated') || 0
-      const deleted = this.resourceCounts.get('deleted') || 0
-      const same = this.resourceCounts.get('same') || 0
-
-      const parts: string[] = []
-      if (created > 0) parts.push(chalk.green(`${created} created`))
-      if (updated > 0) parts.push(chalk.yellow(`${updated} updated`))
-      if (deleted > 0) parts.push(chalk.red(`${deleted} deleted`))
-      if (same > 0) parts.push(chalk.dim(`${same} unchanged`))
-
-      console.log('')
-      const icon = status === 'success' ? chalk.green('✓') : chalk.red('✗')
-      if (parts.length > 0) {
-        this.printItem(icon, parts.join(', '), duration)
-      } else {
-        this.printItem(icon, 'No changes', duration)
-      }
       return
     }
 
@@ -173,6 +282,12 @@ export class UIShell {
     // For other phases, print simple completion
     const icon = status === 'success' ? chalk.green('✓') : chalk.red('✗')
     this.printItem(icon, 'Done', duration)
+  }
+
+  private isDynamic(): boolean {
+    return (this.config.interactive ?? process.stdout.isTTY ?? false) &&
+           process.env.IS_INTERACTIVE !== 'false' &&
+           process.env.CI !== 'true'
   }
 
   private setupEventListeners(): void {
@@ -191,12 +306,22 @@ export class UIShell {
         if (event.phase !== 'Outputs') {
           this.printSection(event.phase)
         }
+
+        // Print config summary after Configuration section header
+        if (event.phase === 'Configuration' && this.deploymentConfig) {
+          this.printDeploymentStart(this.deploymentConfig)
+        }
       })
     )
 
     // Phase complete
     this.unsubscribers.push(
       this.eventBus.onPhaseComplete((event) => {
+        // Collect phase metric
+        const startTime = this.phaseStartTimes.get(event.phase) || Date.now()
+        const duration = Date.now() - startTime
+        this.collectPhaseMetric(event.phase, duration, event.status as 'success' | 'error')
+
         this.printPhaseComplete(event.phase, event.status)
       })
     )
@@ -218,12 +343,23 @@ export class UIShell {
       })
     )
 
-    // Task events
+    // Task events for Build/Bootstrap phases (with spinners in dynamic mode)
     this.unsubscribers.push(
       this.eventBus.onTaskStart((event) => {
         this.taskPhases.set(event.taskId, event.phase)
-        if (event.phase === 'Build') {
-          this.printItem(chalk.blue('○'), `Building ${event.taskName}...`)
+
+        // Handle Build/Bootstrap with spinners
+        if ((event.phase === 'Build' || event.phase === 'Bootstrap') && this.isDynamic()) {
+          this.buildSpinner.start(event.taskId, event.taskName, event.phase)
+        }
+      })
+    )
+
+    this.unsubscribers.push(
+      this.eventBus.onTaskUpdate((event) => {
+        const phase = this.taskPhases.get(event.taskId)
+        if ((phase === 'Build' || phase === 'Bootstrap') && this.isDynamic() && event.message) {
+          this.buildSpinner.update(event.taskId, event.message)
         }
       })
     )
@@ -231,11 +367,19 @@ export class UIShell {
     this.unsubscribers.push(
       this.eventBus.onTaskComplete((event) => {
         const phase = this.taskPhases.get(event.taskId)
-        if (phase === 'Build') {
-          const icon = event.status === 'success' ? chalk.green('✓') : chalk.red('✗')
-          const duration = event.duration ? this.formatDuration(event.duration) : ''
-          this.printItem(icon, event.taskName, duration)
+        const skipped = event.skipped ?? false
+
+        if ((phase === 'Build' || phase === 'Bootstrap') && this.isDynamic()) {
+          this.buildSpinner.complete(event.taskId, event.status === 'success', skipped, event.contentHash)
+        } else if (phase === 'Build' || phase === 'Bootstrap') {
+          // Static mode - just print completion (same format as Deploy)
+          const icon = event.status === 'success' ? chalk.green('+') : chalk.red('-')
+          const duration = event.duration ? ` ${chalk.dim(`(${(event.duration / 1000).toFixed(1)}s)`)}` : ''
+          const statusText = skipped ? chalk.bold.dim('unchanged') : chalk.bold.green('created')
+          const hashText = event.contentHash ? ` ${chalk.dim(`(${event.contentHash})`)}` : ''
+          console.log(`  ${icon} ${event.taskName}${hashText} ${statusText}${duration}`)
         }
+
         this.taskPhases.delete(event.taskId)
       })
     )
@@ -243,7 +387,7 @@ export class UIShell {
 
   /**
    * Process Pulumi deploy output line
-   * Routes through logger for dynamic spinner support
+   * Just tracks resources for summary counts - actual output goes to pulumiLogger via onOutput
    */
   private processDeployOutput(message: string): void {
     // Track resources for summary counts (still needed for printPhaseComplete)
@@ -259,9 +403,6 @@ export class UIShell {
         }
       }
     }
-
-    // Route through logger for spinner support
-    this.logger.log(message)
   }
 
   log(message: string): void {
@@ -284,9 +425,45 @@ export class UIShell {
     this.printItem(chalk.red('✗'), message)
   }
 
+  /**
+   * Set deployment configuration for pre-deployment summary
+   */
+  setDeploymentConfig(config: DeploymentConfig): void {
+    this.deploymentConfig = config
+  }
+
+  /**
+   * Get collected phase metrics
+   */
+  getPhaseMetrics(): PhaseMetric[] {
+    return Array.from(this.phaseMetrics.values())
+  }
+
+  /**
+   * Print pre-deployment configuration summary
+   */
+  printDeploymentStart(config: DeploymentConfig): void {
+    console.log(formatDeploymentConfig(config))
+  }
+
+  /**
+   * Print final deployment summary
+   */
+  printFinalSummary(result: DeploymentResult): void {
+    const phases = this.getPhaseMetrics()
+    console.log(formatFinalSummary(result, phases))
+  }
+
+  /**
+   * Collect phase metric for final summary
+   */
+  private collectPhaseMetric(phase: PhaseName, duration: number, status: 'success' | 'error'): void {
+    this.phaseMetrics.set(phase, { phase, duration, status })
+  }
+
   cleanup(): void {
-    // Clean up logger (shows cursor, clears spinner interval)
-    this.logger.cleanup()
+    // Clean up build spinner
+    this.buildSpinner.cleanup()
 
     for (const unsubscribe of this.unsubscribers) {
       unsubscribe()

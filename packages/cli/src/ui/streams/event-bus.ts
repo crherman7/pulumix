@@ -85,6 +85,16 @@ export class DeploymentEventBus {
   }
 
   /**
+   * Subscribe to task update events
+   */
+  onTaskUpdate(handler: (event: Extract<DeploymentEvent, { type: 'TaskUpdate' }>) => void): () => void {
+    const subscription = this.subject
+      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'TaskUpdate' }> => e.type === 'TaskUpdate'))
+      .subscribe(handler)
+    return () => subscription.unsubscribe()
+  }
+
+  /**
    * Subscribe to task complete events
    */
   onTaskComplete(handler: (event: Extract<DeploymentEvent, { type: 'TaskComplete' }>) => void): () => void {

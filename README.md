@@ -89,7 +89,7 @@ export default async (ctx: ServiceContext): Promise<ServiceResult> => {
         spec: {
           containers: [{
             name: serviceName,
-            image: image || `${serviceName}:latest`,
+            image,  // Digest-based: registry/name@sha256:...
             ports: [{ containerPort: 3000 }]
           }]
         }
@@ -114,19 +114,38 @@ pulumix deploy local
 
 ```
 Configuration
-  • Project: my-project
   • Stack: local
+  • Services: 1 service
 
 Discovery
-  • Found 1 local service(s)
-  • Found 0 published service(s)
+  + Found 1 service
+
+Dependencies
+  └─ my-api
+
+Build
+  + my-api (a1b2c3d4e5f6) created (3.2s)
 
 Deploy
-  ✓ my-api deployed (5.2s)
+  + Namespace my-api created (0.5s)
+  + Deployment my-api created (1.8s)
+  + Service my-api created (0.3s)
 
 Summary
-  • Services: 1 deployed
-  • Duration: 8.4s
+
+  Resources:
+    3 created
+
+  Duration:
+    Configuration   0.1s
+    Discovery       0.2s
+    Dependencies    0.0s
+    Build           3.2s
+    Deploy          2.6s
+    ─────────────────────
+    Total           6.1s
+
+  + Deployment completed
 ```
 
 ---
@@ -211,7 +230,26 @@ export default async (ctx: ServiceContext<ApiDependencies>): Promise<ServiceResu
 }
 ```
 
-### 4. Federated Services
+### 4. Smart Build Caching
+
+Pulumix uses content-based hashing to avoid unnecessary rebuilds:
+
+```
+Build
+  + my-api (a1b2c3d4e5f6) created (3.2s)    # First deploy - builds image
+  + my-api (a1b2c3d4e5f6) unchanged (0.1s)  # Second deploy - skips build
+  + my-api (b7c8d9e0f1a2) created (2.8s)    # After code change - rebuilds
+```
+
+**How it works:**
+1. Hashes all source files in the service directory (ignores node_modules, .git, etc.)
+2. Tags images with the content hash: `registry/my-api:a1b2c3d4e5f6`
+3. Checks if that image already exists in the registry
+4. Skips build if unchanged, or builds and pushes if new
+
+**Guaranteed deployments:** Images are referenced by digest (`@sha256:...`) rather than tag, ensuring Kubernetes always uses the exact image that was just built—eliminating stale cache issues.
+
+### 5. Federated Services
 
 **Publish services to npm:**
 
@@ -258,8 +296,8 @@ Declare dependencies in `package.json`. Pulumix resolves and deploys in order.
 ### 🎯 **Type-Safe Contracts**
 Export TypeScript interfaces. Get IntelliSense when wiring services together.
 
-### 🐳 **Docker Builds**
-Automatically builds and pushes images before deployment. Supports multi-stage builds.
+### 🐳 **Smart Docker Builds**
+Content-based build caching skips unchanged services. Images are tagged with content hashes and referenced by digest for guaranteed deployments.
 
 ### 🔐 **Security Allowlist**
 Control which published services can execute. Glob pattern matching (`@platform/*`).
@@ -282,13 +320,37 @@ Full access to Pulumi SDK. Any cloud, any resource.
 
 See the [hello-world example](./examples/hello-world) for a complete multi-service deployment:
 
-- **provider** - Creates k3d cluster with registry
-- **ingress** - Installs Traefik (or skips for k3d)
-- **hello-world** - Deploys HTTP service with Ingress
+- **provider** - Creates k3d cluster with local registry
+- **ingress** - Configures ingress (uses k3d's built-in Traefik)
+- **hello-world** - Builds and deploys HTTP service with Ingress
 
 ```bash
 cd examples/hello-world
+pnpm install
 pnpm run deploy local
+```
+
+```
+Configuration
+  • Stack: local
+  • Services: 3 services
+    • provider v1.0.0
+    • ingress v1.0.0
+    • hello-world v1.0.0
+
+Cluster
+  + hello-world created (2.1s)
+
+Build
+  + hello-world (a1b2c3d4e5f6) created (4.2s)
+
+Deploy
+  + Namespace hello-world created (0.5s)
+  + Deployment hello-world created (1.8s)
+  + Service hello-world created (0.3s)
+  + Ingress hello-world created (0.2s)
+
+  + Deployment completed
 ```
 
 Visit: http://hello-world.127.0.0.1.sslip.io/
@@ -443,7 +505,7 @@ interface ServiceContext<TDeps = any> {
   dependencies: TDeps                  // Typed outputs from dependencies
 
   // Docker image (if Dockerfile exists)
-  image?: string                       // "registry:5000/my-api:latest"
+  image?: string                       // "registry:5000/my-api@sha256:abc123..."
 }
 ```
 

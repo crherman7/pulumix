@@ -36,7 +36,6 @@ export default async (ctx: ServiceContext): Promise<ServiceResult<IngressOutputs
 
   // Skip if not installing (k3d has traefik built-in)
   if (!install) {
-    console.log('Skipping ingress installation (using built-in)')
     return {
       outputs: {
         skipped: true,

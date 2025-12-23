@@ -94,6 +94,10 @@ export interface TaskCompleteEvent {
   readonly timestamp: number
   readonly duration?: number
   readonly error?: DeployError
+  /** Whether the task was skipped (e.g., build cache hit) */
+  readonly skipped?: boolean
+  /** Content hash for build tasks */
+  readonly contentHash?: string
 }
 
 /**

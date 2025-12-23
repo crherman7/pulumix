@@ -1,397 +1,278 @@
 /**
- * Line Formatter
+ * Line Formatter - Based on Rocketyard's proven approach
  *
- * Parses and formats output lines with block detection and colorization.
- * Uses purify-ts Maybe/Either for pure functional parsing.
+ * Parses Pulumi text output line by line.
  */
 
 import chalk from 'chalk'
 import cliSpinners from 'cli-spinners'
-import { Maybe } from 'purify-ts/Maybe'
-import { Either, Left, Right } from 'purify-ts/Either'
+
 import {
-  TaskState,
-  TaskUpdate,
-  createInitialState,
-  updateTaskInState,
-  advanceAllSpinners,
-  renderTaskLines,
-  formatTask,
-  getCompletedTasks,
-  isCompleteStatus,
   Change,
   Status,
-  TaskPrinter,
+  TaskUpdate,
+  clearTaskLines,
+  printRunningTasks,
+  processProgress,
+  resetTasks,
 } from './task-formatter'
 
 // ============================================================================
-// Discriminated Unions
+// Types
 // ============================================================================
 
-/**
- * Block type - discriminated union for output blocks
- */
-export type Block =
-  | { readonly _tag: 'Progress'; readonly color: chalk.Chalk }
-  | { readonly _tag: 'Resources' }
-  | { readonly _tag: 'Duration' }
-  | { readonly _tag: 'Diagnostics' }
-  | { readonly _tag: 'Outputs' }
-  | { readonly _tag: 'None' }
-
-export const Block = {
-  Progress: (color: chalk.Chalk): Block => ({ _tag: 'Progress', color }),
-  Resources: { _tag: 'Resources' } as const,
-  Duration: { _tag: 'Duration' } as const,
-  Diagnostics: { _tag: 'Diagnostics' } as const,
-  Outputs: { _tag: 'Outputs' } as const,
-  None: { _tag: 'None' } as const,
+export enum Block {
+  Progress = 'Progress',
+  Resources = 'Resources',
+  Duration = 'Duration',
+  Diagnostics = 'Diagnostics',
+  Outputs = 'Outputs',
 }
 
-// ============================================================================
-// Immutable State
-// ============================================================================
-
-/**
- * Immutable processor state
- */
-export interface ProcessorState {
-  readonly block: Block
-  readonly taskState: TaskState
-  readonly lastLine: string
-}
-
-/**
- * Create initial processor state
- */
-export const createInitialProcessorState = (): ProcessorState => ({
-  block: Block.None,
-  taskState: createInitialState(),
-  lastLine: '',
-})
-
-// ============================================================================
-// Pure Functions - Block Detection
-// ============================================================================
-
-/**
- * Detect block header from line (pure)
- */
-export const detectBlockHeader = (line: string): Maybe<Block> => {
-  if (line.startsWith('Creating') || line.startsWith('Updating') || line.startsWith('Building')) {
-    return Maybe.of(Block.Progress(chalk.bold.green))
-  }
-  if (line.startsWith('Destroying')) {
-    return Maybe.of(Block.Progress(chalk.bold.red))
-  }
-  if (line.startsWith('Refreshing')) {
-    return Maybe.of(Block.Progress(chalk.bold.grey))
-  }
-  if (line.startsWith('Resources:')) {
-    return Maybe.of(Block.Resources)
-  }
-  if (line.startsWith('Duration:')) {
-    return Maybe.of(Block.Duration)
-  }
-  if (line.startsWith('Diagnostics:')) {
-    return Maybe.of(Block.Diagnostics)
-  }
-  if (line.startsWith('Outputs:')) {
-    return Maybe.of(Block.Outputs)
-  }
-  return Maybe.empty()
-}
-
-// ============================================================================
-// Pure Functions - Line Parsing
-// ============================================================================
-
-/**
- * Parse change symbol to Change type
- */
-export const parseChangeSymbol = (symbol: string): Change => {
-  switch (symbol) {
-    case '+':
-      return Change.Create
-    case '~':
-      return Change.Update
-    case '-':
-      return Change.Delete
-    case '!':
-    case '++':
-      return Change.Replace
-    case '*':
-      return Change.Running
-    default:
-      return Change.Unchanged
-  }
-}
-
-/**
- * Parse status string to Status type
- */
-export const parseStatus = (status: string): Status => {
-  const normalized = status.toLowerCase().trim()
-  switch (normalized) {
-    case 'creating':
-      return Status.Creating
-    case 'created':
-      return Status.Created
-    case 'updating':
-      return Status.Updating
-    case 'updated':
-      return Status.Updated
-    case 'deleting':
-      return Status.Deleting
-    case 'deleted':
-      return Status.Deleted
-    case 'replacing':
-      return Status.Replacing
-    case 'replaced':
-      return Status.Replaced
-    case 'failed':
-      return Status.Failed
-    case 'running':
-      return Status.Running
-    case 'refreshing':
-      return Status.Refreshing
-    case 'refresh':
-      return Status.Refresh
-    default:
-      return Status.Creating
-  }
-}
-
-/**
- * Parse a progress line into TaskUpdate (pure)
- */
-export const parseProgressLine = (line: string): Either<string, TaskUpdate> => {
-  const trimmed = line.trim()
-
-  // Must start with a change symbol
-  if (!/^[+~\-!\s*]/.test(trimmed)) {
-    return Left('Not a progress line')
-  }
-
-  const changeSymbol = trimmed[0] ?? ''
-  const change = parseChangeSymbol(changeSymbol)
-
-  // Parse: resourceType resourceName status (time) message
-  const rest = trimmed.slice(1).trim()
-  const parts = rest.split(/\s+/)
-
-  if (parts.length < 2) {
-    return Left('Invalid progress line format')
-  }
-
-  const resourceType = parts[0] ?? 'unknown'
-  const name = parts[1] ?? 'unknown'
-
-  // Find status (could be with ** markers or plain)
-  let status: Status = Status.Creating
-  let message: string | undefined
-
-  if (parts.length > 2) {
-    const statusPart = parts[2] ?? ''
-    if (statusPart.startsWith('**')) {
-      status = parseStatus(statusPart.replace(/\*\*/g, ''))
-    } else if (statusPart.startsWith('(')) {
-      // This is time, not status
-    } else {
-      status = parseStatus(statusPart)
-    }
-
-    // Rest could be message
-    if (parts.length > 4) {
-      message = parts.slice(4).join(' ')
-    }
-  }
-
-  return Right({
-    id: `${resourceType}:${name}`,
-    resourceType,
-    name,
-    change,
-    status,
-    message,
-  })
-}
-
-/**
- * Format diagnostic line with colors (pure)
- */
-export const formatDiagnosticLine = (line: string): string => {
-  if (line.includes('error:')) {
-    return line.replace('error:', chalk.red('error:'))
-  }
-  if (line.includes('warning:')) {
-    return line.replace('warning:', chalk.yellow('warning:'))
-  }
-  if (line.includes('debug:')) {
-    return line.replace('debug:', chalk.gray('debug:'))
-  }
-  return line
-}
-
-// ============================================================================
-// Line Processor (with dependency injection)
-// ============================================================================
-
-/**
- * Dependencies for line processor
- */
-export interface LineProcessorDeps {
-  readonly print: (msg: string) => void
-  readonly taskPrinter: TaskPrinter
-}
-
-/**
- * Line processor interface
- */
 export interface LineProcessor {
-  readonly processLine: (line: string) => void
-  readonly cleanup: () => void
+  appendLine: (message: string) => void
+  resetLine: () => void
+  processLine: () => void
 }
 
-/**
- * Create line processor with injected dependencies
- */
-export const createLineProcessor = (
-  mode: 'dynamic' | 'static',
-  deps: LineProcessorDeps
-): LineProcessor => {
-  const isDynamic = mode === 'dynamic'
+// ============================================================================
+// Line Processor Factory
+// ============================================================================
 
-  // Mutable state (encapsulated, not exposed)
-  let state = createInitialProcessorState()
-  let spinnerInterval: NodeJS.Timeout | null = null
+const ICON_REGEX = /^[+~\-\s*@]/
 
-  const processLine = (line: string): void => {
-    const trimmedLine = line.replace(/^\s{1,2}/, '').trimEnd()
+export const createLineProcessor = (type: 'dynamic' | 'static'): LineProcessor => {
+  const isDynamic = type === 'dynamic'
 
-    // Skip empty duplicate lines
-    if (trimmedLine === '' && state.lastLine === '') {
-      return
+  let block: Block | null = null
+  let lastLine = ''
+  let line = ''
+  let color = chalk.bold.gray
+  let interval: NodeJS.Timeout | null = null
+
+  const parseLine = (): TaskUpdate => {
+    let workingLine = line
+    let change = workingLine.split(' ')[0] as Change | string
+    workingLine = workingLine.replace(change, '').trimStart()
+
+    const [resourceType, resourceName] = workingLine.split(' ') as [string, string]
+    workingLine = workingLine.replace(`${resourceType} ${resourceName}`, '').trimStart()
+
+    let status: Status | undefined
+    if (workingLine.startsWith('**')) {
+      const parts = workingLine.split('**')
+      status = parts[1] as Status | undefined
+      workingLine = workingLine.replace(`**${status}**`, '').trimStart()
+    } else if (workingLine.includes('(')) {
+      const parts = workingLine.split('(')
+      status = parts[0]?.trimEnd() as Status | undefined
+      workingLine = workingLine.replace(`${status}(`, '(').trimStart()
+    } else if (workingLine.includes(':')) {
+      const parts = workingLine.split(':')
+      status = parts[0]?.trimEnd() as Status | undefined
+      workingLine = workingLine.replace(`${status}:`, '').trimStart()
     }
 
-    // Check for block header
-    const blockHeader = detectBlockHeader(trimmedLine)
+    let time = ''
+    let message: string[] = []
+    if (workingLine.startsWith('(')) {
+      const parts = workingLine.split(' ')
+      time = parts[0] || ''
+      message = parts.slice(1)
+    } else {
+      message = workingLine.split(' ')
+    }
 
-    if (blockHeader.isJust()) {
-      const newBlock = blockHeader.extract()
+    // Normalize change symbols
+    switch (change) {
+      case '++':
+      case '+-':
+        change = Change.Replace
+        break
+      case '--':
+        change = Change.Delete
+        break
+      default:
+    }
 
-      // Transition from Progress block - print completed tasks
-      if (state.block._tag === 'Progress' && newBlock._tag !== 'Progress') {
-        if (spinnerInterval) {
-          clearInterval(spinnerInterval)
-          spinnerInterval = null
+    return {
+      change: change as Change,
+      resourceType: resourceType || '',
+      resourceName: resourceName || '',
+      status,
+      time,
+      message: message.join(' '),
+    }
+  }
+
+  const processHeader = (): boolean => {
+    if (
+      line.startsWith('Creating') ||
+      line.startsWith('Updating') ||
+      line.startsWith('Destroying') ||
+      line.startsWith('Refreshing') ||
+      line.startsWith('Building')
+    ) {
+      block = Block.Progress
+      color = (() => {
+        switch (line.split(' ')[0]) {
+          case 'Creating':
+          case 'Updating':
+          case 'Building':
+            return chalk.bold.green
+          case 'Destroying':
+            return chalk.bold.red
+          default:
+            return chalk.bold.grey
         }
-        if (isDynamic) {
-          deps.taskPrinter.clear()
-          // Print completed tasks
-          const completed = getCompletedTasks(state.taskState)
-          for (const task of completed) {
-            deps.print(formatTask(task))
-          }
-        }
-        deps.print('') // Empty line before next block
-      }
+      })()
 
-      state = { ...state, block: newBlock, taskState: createInitialState() }
-
-      // Start spinner interval for Progress block
-      if (newBlock._tag === 'Progress' && isDynamic) {
-        spinnerInterval = setInterval(() => {
-          state = {
-            ...state,
-            taskState: advanceAllSpinners(state.taskState),
-          }
-          deps.taskPrinter.print(renderTaskLines(state.taskState))
+      if (isDynamic) {
+        interval = setInterval(() => {
+          printRunningTasks()
         }, cliSpinners.dots.interval)
       }
 
-      // Print header with color (hide some headers)
-      if (newBlock._tag === 'Progress') {
-        deps.print(newBlock.color(trimmedLine))
+      line = line.replace(/.*:/g, (title) => color(title))
+      console.log(line)
+      return true
+    }
+
+    if (
+      line.startsWith('Resources:') ||
+      line.startsWith('Diagnostics:') ||
+      line.startsWith('Outputs:')
+    ) {
+      if (block === Block.Progress) {
+        if (interval) {
+          clearInterval(interval)
+          interval = null
+        }
+
+        clearTaskLines()
+        if (isDynamic) {
+          printRunningTasks(false)
+          resetTasks()
+        }
+
+        console.log('')
       }
-      // Skip Outputs, Resources, Duration headers - content is formatted inline
-      state = { ...state, lastLine: trimmedLine }
+    }
+
+    if (line.startsWith('Outputs:')) {
+      block = Block.Outputs
+      return true
+    }
+
+    if (line.startsWith('Resources:')) {
+      line = line.replace(/.*:/g, (title) => color(title))
+      console.log(line)
+      block = Block.Resources
+      return true
+    }
+
+    if (line.startsWith('Diagnostics:')) {
+      line = line.replace(/.*:/g, (title) => color(title))
+      console.log(line)
+      block = Block.Diagnostics
+      return true
+    }
+
+    if (line.startsWith('Duration:')) {
+      line = line.replace(/.*:/g, (title) => color(title))
+      console.log(line)
+      block = Block.Duration
+      return true
+    }
+
+    return false
+  }
+
+  const appendLine = (message: string): void => {
+    line += message
+  }
+
+  const resetLine = (): void => {
+    lastLine = line
+    line = ''
+  }
+
+  const processLine = (): void => {
+    line = line.replace(/^\s\s?/g, '').trimEnd()
+
+    if (line === '' && lastLine === '') {
+      // Prevent double empty lines
+      resetLine()
       return
     }
 
-    // Process line based on current block
-    switch (state.block._tag) {
-      case 'Progress':
-        parseProgressLine(trimmedLine).ifRight((update) => {
-          const prevTask = state.taskState.tasks.get(update.id)
-          const isNewTask = !prevTask
-          const isComplete = update.status && isCompleteStatus(update.status)
+    const isHeader = processHeader()
+    if (isHeader) {
+      resetLine()
+      return
+    }
 
-          state = {
-            ...state,
-            taskState: updateTaskInState(state.taskState, update),
-          }
+    switch (block) {
+      case Block.Progress: {
+        // Skip @ lines (refreshing)
+        if (line.startsWith('@')) {
+          resetLine()
+          return
+        }
 
-          // In static mode, only print when task is created or completed (not intermediate progress)
-          if (!isDynamic && (isNewTask || isComplete)) {
-            const task = state.taskState.tasks.get(update.id)
-            if (task) {
-              deps.print(formatTask(task))
-            }
-          }
-        })
+        if (!ICON_REGEX.test(line)) {
+          resetLine()
+          return
+        }
+
+        processProgress(parseLine(), isDynamic)
         break
+      }
 
-      case 'Diagnostics':
-        deps.print(formatDiagnosticLine(trimmedLine))
-        break
-
-      case 'Outputs':
-        // Hide internal outputs (they're displayed in final summary)
-        break
-
-      case 'Resources':
-        // Format resources summary - show count line
-        if (trimmedLine.includes('created') || trimmedLine.includes('updated') ||
-            trimmedLine.includes('deleted') || trimmedLine.includes('unchanged')) {
-          // Color-code based on type
-          let formatted = trimmedLine
-          if (trimmedLine.includes('created')) {
-            formatted = chalk.green(trimmedLine)
-          } else if (trimmedLine.includes('updated')) {
-            formatted = chalk.yellow(trimmedLine)
-          } else if (trimmedLine.includes('deleted')) {
-            formatted = chalk.red(trimmedLine)
-          } else {
-            formatted = chalk.dim(trimmedLine)
-          }
-          deps.print(`  ${formatted}`)
+      case Block.Diagnostics:
+        if (line.trimStart().startsWith('warning:')) {
+          line = line.replace('warning:', chalk.yellow('warning:'))
+          console.log(line)
+        } else if (line.trimStart().startsWith('error:')) {
+          line = line.replace('error:', chalk.red('error:'))
+          console.log(line)
+        } else if (line.trimStart().startsWith('debug:')) {
+          line = line.replace('debug:', chalk.gray('debug:'))
+          console.log(line)
+        } else {
+          console.log(line)
         }
         break
 
-      case 'Duration':
-        // Show duration on same line
-        if (trimmedLine.match(/^\d+/)) {
-          deps.print(`  ${chalk.dim(`Duration: ${trimmedLine}`)}`)
+      case Block.Outputs:
+        // Hide outputs
+        break
+
+      case Block.Resources:
+        // Show resources summary
+        if (line.length > 0) {
+          console.log(`  ${line}`)
         }
         break
 
       default:
-        if (trimmedLine.length > 0) {
-          deps.print(trimmedLine)
+        // Filter out informational messages
+        const skipPatterns = [
+          /k3d cluster.*already exists/i,
+          /skipping.*installation/i,
+          /using built-in/i,
+          /already running/i,
+          /waiting for/i,
+        ]
+        const shouldSkip = skipPatterns.some(pattern => pattern.test(line))
+
+        if (line.length > 0 && !shouldSkip) {
+          console.log(line)
         }
     }
 
-    state = { ...state, lastLine: trimmedLine }
+    resetLine()
   }
 
-  const cleanup = (): void => {
-    if (spinnerInterval) {
-      clearInterval(spinnerInterval)
-      spinnerInterval = null
-    }
-    deps.taskPrinter.showCursor()
-  }
-
-  return { processLine, cleanup }
+  return { appendLine, resetLine, processLine }
 }

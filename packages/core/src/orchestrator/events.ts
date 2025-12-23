@@ -90,6 +90,7 @@ const getPhaseNumber = (phase: DeploymentPhase): number =>
 export class OrchestratorEventEmitter {
   private listeners: EventListener[] = []
   private currentPhase: DeploymentPhase = 'initialization'
+  private taskStartTimes: Map<string, number> = new Map()
 
   /**
    * Subscribe to events
@@ -173,14 +174,34 @@ export class OrchestratorEventEmitter {
   /**
    * Emit task start event
    */
-  emitTaskStart(taskName: string): void {
-    const eventPhase = mapPhaseToEventPhase(this.currentPhase)
+  emitTaskStart(taskIdOrName: string, taskName?: string, phase?: string): void {
+    // Support both old signature (taskName only) and new (taskId, taskName)
+    const taskId = taskIdOrName
+    const displayName = taskName || taskIdOrName
+    const eventPhase = phase ? mapPhaseToEventPhase(phase as any) : mapPhaseToEventPhase(this.currentPhase)
+    const now = Date.now()
+
+    // Record start time for duration calculation (use taskId for tracking)
+    this.taskStartTimes.set(taskId, now)
 
     this.emit({
       type: 'TaskStart',
-      taskId: taskName,
-      taskName,
+      taskId,
+      taskName: displayName,
       phase: eventPhase,
+      timestamp: now
+    })
+  }
+
+  /**
+   * Emit task update event (for progress)
+   */
+  emitTaskUpdate(taskName: string, message: string, progress?: number): void {
+    this.emit({
+      type: 'TaskUpdate',
+      taskId: taskName,
+      progress,
+      message,
       timestamp: Date.now()
     })
   }
@@ -188,14 +209,31 @@ export class OrchestratorEventEmitter {
   /**
    * Emit task complete event
    */
-  emitTaskComplete(taskName: string, success: boolean): void {
+  emitTaskComplete(taskName: string, success: boolean, skipped?: boolean, contentHash?: string): void {
+    const now = Date.now()
+    const startTime = this.taskStartTimes.get(taskName)
+    const duration = startTime ? now - startTime : undefined
+
+    // Clean up start time
+    this.taskStartTimes.delete(taskName)
+
     this.emit({
       type: 'TaskComplete',
       taskId: taskName,
       taskName,
       status: success ? 'success' : 'error',
-      timestamp: Date.now()
+      timestamp: now,
+      duration,
+      skipped,
+      contentHash
     })
+  }
+
+  /**
+   * Emit diagnostic event
+   */
+  emitDiagnostic(message: string, phase?: PhaseName): void {
+    this.emit(createDiagnosticEvent('info', message, phase))
   }
 
   /**

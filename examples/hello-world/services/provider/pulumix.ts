@@ -39,11 +39,8 @@ export default async (ctx: ServiceContext): Promise<ServiceResult<ProviderOutput
     const listResult = spawnSync('k3d', ['cluster', 'list'], { encoding: 'utf-8' })
     const clusterExists = listResult.stdout?.includes(clusterName)
 
-    if (clusterExists) {
-      console.log(`k3d cluster '${clusterName}' already exists`)
-    } else {
-      // Create cluster with registry
-      console.log(`Creating k3d cluster: ${clusterName}`)
+    if (!clusterExists) {
+      // Create cluster with registry (this is a fallback - Bootstrap phase handles this)
       const createResult = spawnSync('k3d', [
         'cluster', 'create', clusterName,
         '--registry-create', `${clusterName}-registry:0.0.0.0:${registryPort}`,

@@ -9,22 +9,54 @@ import * as pulumi from '@pulumi/pulumi'
 import type { ServiceMetadata, ObservabilityConfig, SecurityConfig } from './manifest'
 
 /**
- * Configuration passed to a service's deploy function
+ * Configuration passed to a service's deploy function.
  *
- * @template TDeps - Type of dependency outputs (for type-safe access)
+ * Provides access to configuration, dependencies, metadata, and pre-built images.
+ * Services use this context to create their Pulumi resources with full type safety.
+ *
+ * @template TDeps - Type of dependency outputs (for type-safe access to dependency services)
+ *
+ * @see {@link ServiceResult} for the return type
+ * @see {@link ServiceDeployFn} for the function signature
+ * @see {@link ServiceMetadata} for metadata structure
  *
  * @example
+ * Basic usage without typed dependencies
  * ```typescript
- * // Without typed dependencies
- * export default async (ctx: ServiceContext) => { ... }
+ * export default async (ctx: ServiceContext) => {
+ *   const config = ctx.config
+ *   const namespace = ctx.namespace
  *
- * // With typed dependencies
+ *   // Create resources...
+ *   return { outputs: { endpoint: '...' } }
+ * }
+ * ```
+ *
+ * @example
+ * Advanced usage with typed dependencies
+ * ```typescript
+ * // Define dependency outputs
+ * interface ProviderOutputs {
+ *   registry: string
+ *   clusterName: string
+ * }
+ *
+ * interface IngressOutputs {
+ *   className: string
+ * }
+ *
+ * // Define dependencies interface
  * interface MyDependencies {
  *   provider: ProviderOutputs
  *   ingress: IngressOutputs
  * }
+ *
+ * // Use in service
  * export default async (ctx: ServiceContext<MyDependencies>) => {
- *   const registry = ctx.dependencies.provider.registry // ✅ Type-safe!
+ *   const registry = ctx.dependencies.provider.registry // ✅ Fully typed!
+ *   const ingressClass = ctx.dependencies.ingress.className // ✅ Autocomplete works!
+ *
+ *   // Create resources with dependency values...
  * }
  * ```
  */
@@ -52,11 +84,18 @@ export interface ServiceContext<TDeps = Record<string, Record<string, unknown>>>
 }
 
 /**
- * Result returned from a service's deploy function
+ * Result returned from a service's deploy function.
  *
- * @template TOutputs - Type of output values (for consumers to use)
+ * Services return outputs that other services can consume as dependencies.
+ * Outputs are strongly typed for type-safe dependency injection.
+ *
+ * @template TOutputs - Type of output values (for downstream consumers)
+ *
+ * @see {@link ServiceContext} for the input context
+ * @see {@link ServiceDeployFn} for the function signature
  *
  * @example
+ * Service with typed outputs
  * ```typescript
  * export interface ProviderOutputs {
  *   clusterName: string
@@ -64,12 +103,23 @@ export interface ServiceContext<TDeps = Record<string, Record<string, unknown>>>
  * }
  *
  * export default async (ctx: ServiceContext): Promise<ServiceResult<ProviderOutputs>> => {
+ *   // Create resources...
+ *
  *   return {
  *     outputs: {
  *       clusterName: 'my-cluster',
  *       registry: 'localhost:5001'
  *     }
  *   }
+ * }
+ * ```
+ *
+ * @example
+ * Service without outputs (terminal service)
+ * ```typescript
+ * export default async (ctx: ServiceContext): Promise<void> => {
+ *   // Create resources that don't need to expose outputs
+ *   // Other services won't depend on this one
  * }
  * ```
  */
@@ -81,10 +131,34 @@ export interface ServiceResult<TOutputs = Record<string, unknown>> {
 }
 
 /**
- * Service deploy function signature
+ * Service deploy function signature.
  *
- * @template TDeps - Type of dependency outputs
- * @template TOutputs - Type of service outputs
+ * The main entry point for a service. Each service exports a default function
+ * that receives a ServiceContext and returns ServiceResult or void.
+ *
+ * @template TDeps - Type of dependency outputs (services this service depends on)
+ * @template TOutputs - Type of service outputs (values this service exposes)
+ *
+ * @see {@link ServiceContext} for the context parameter
+ * @see {@link ServiceResult} for the return type
+ *
+ * @example
+ * Basic service (pulumix.ts)
+ * ```typescript
+ * import * as k8s from '@pulumi/kubernetes'
+ * import { ServiceContext, ServiceResult } from '@pulumix/core'
+ *
+ * export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+ *   const deployment = new k8s.apps.v1.Deployment(ctx.serviceName, {
+ *     metadata: { namespace: ctx.namespace },
+ *     spec: { ... }
+ *   })
+ *
+ *   return {
+ *     outputs: { deploymentName: deployment.metadata.name }
+ *   }
+ * }
+ * ```
  */
 export type ServiceDeployFn<
   TDeps = Record<string, Record<string, unknown>>,
@@ -92,7 +166,27 @@ export type ServiceDeployFn<
 > = (ctx: ServiceContext<TDeps>) => Promise<ServiceResult<TOutputs> | void>
 
 /**
- * Discovered service from services/*/
+ * Discovered service from the codebase.
+ *
+ * Represents a service found during the discovery phase. Contains all metadata,
+ * configuration, and file paths needed to deploy the service.
+ *
+ * Services are discovered by finding directories with both `pulumix.ts` and
+ * `pulumix.yaml` files.
+ *
+ * @see {@link ResolvedService} for service with resolved stack config
+ *
+ * @example
+ * Service discovery finds services with this structure:
+ * ```
+ * services/
+ *   my-service/
+ *     pulumix.ts      ← Deploy function
+ *     pulumix.yaml    ← Service configuration
+ *     Dockerfile      ← Optional
+ *     package.json    ← Dependencies
+ * ```
+ */
 export interface DiscoveredService {
   /** Service name (directory name) */
   readonly name: string
@@ -117,7 +211,28 @@ export interface DiscoveredService {
 }
 
 /**
- * Service with resolved stack config
+ * Service with resolved stack-specific configuration.
+ *
+ * Extends DiscoveredService with stack-specific config values resolved
+ * from the `stacks` section of pulumix.yaml.
+ *
+ * @see {@link DiscoveredService} for base service information
+ *
+ * @example
+ * Stack config resolution from pulumix.yaml:
+ * ```yaml
+ * stacks:
+ *   local:
+ *     replicas: 1
+ *     imagePullPolicy: IfNotPresent
+ *   production:
+ *     replicas: 5
+ *     imagePullPolicy: Always
+ * ```
+ * When deploying to 'production', stackConfig will be:
+ * ```typescript
+ * { replicas: 5, imagePullPolicy: 'Always' }
+ * ```
  */
 export interface ResolvedService extends DiscoveredService {
   /** Stack-specific config */

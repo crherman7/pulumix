@@ -1,344 +1,263 @@
 /**
- * Task Formatter
+ * Task Formatter - Based on Rocketyard's proven approach
  *
- * Pure functional task tracking with spinners for CLI output.
- * Uses discriminated unions, immutable state, and purify-ts for FP patterns.
+ * Uses text parsing (not events) for reliable terminal output.
  */
 
 import chalk from 'chalk'
 import cliSpinners from 'cli-spinners'
 import logUpdate from 'ansi-diff'
-import { Maybe } from 'purify-ts/Maybe'
-import { formatResourceType } from './name-formatter'
 
 // ============================================================================
-// Discriminated Unions
+// Types
 // ============================================================================
 
-/**
- * Change type - discriminated union for resource changes
- */
-export type Change =
-  | { readonly _tag: 'Create'; readonly symbol: '+' }
-  | { readonly _tag: 'Update'; readonly symbol: '~' }
-  | { readonly _tag: 'Delete'; readonly symbol: '-' }
-  | { readonly _tag: 'Replace'; readonly symbol: '!' }
-  | { readonly _tag: 'Running'; readonly symbol: '*' }
-  | { readonly _tag: 'Unchanged'; readonly symbol: ' ' }
-
-export const Change = {
-  Create: { _tag: 'Create', symbol: '+' } as const,
-  Update: { _tag: 'Update', symbol: '~' } as const,
-  Delete: { _tag: 'Delete', symbol: '-' } as const,
-  Replace: { _tag: 'Replace', symbol: '!' } as const,
-  Running: { _tag: 'Running', symbol: '*' } as const,
-  Unchanged: { _tag: 'Unchanged', symbol: ' ' } as const,
+export enum Change {
+  Create = '+',
+  Replace = '!',
+  Delete = '-',
+  Update = '~',
+  Running = '*',
+  Unchanged = '',
 }
 
-/**
- * Status type - discriminated union for task status
- */
-export type Status =
-  | { readonly _tag: 'Creating' }
-  | { readonly _tag: 'Created' }
-  | { readonly _tag: 'Updating' }
-  | { readonly _tag: 'Updated' }
-  | { readonly _tag: 'Deleting' }
-  | { readonly _tag: 'Deleted' }
-  | { readonly _tag: 'Replacing' }
-  | { readonly _tag: 'Replaced' }
-  | { readonly _tag: 'Failed' }
-  | { readonly _tag: 'Running' }
-  | { readonly _tag: 'Refreshing' }
-  | { readonly _tag: 'Refresh' }
-
-export const Status = {
-  Creating: { _tag: 'Creating' } as const,
-  Created: { _tag: 'Created' } as const,
-  Updating: { _tag: 'Updating' } as const,
-  Updated: { _tag: 'Updated' } as const,
-  Deleting: { _tag: 'Deleting' } as const,
-  Deleted: { _tag: 'Deleted' } as const,
-  Replacing: { _tag: 'Replacing' } as const,
-  Replaced: { _tag: 'Replaced' } as const,
-  Failed: { _tag: 'Failed' } as const,
-  Running: { _tag: 'Running' } as const,
-  Refreshing: { _tag: 'Refreshing' } as const,
-  Refresh: { _tag: 'Refresh' } as const,
+export enum Status {
+  Creating = 'creating',
+  Created = 'created',
+  Deleting = 'deleting',
+  Deleted = 'deleted',
+  Updating = 'updating',
+  Updated = 'updated',
+  Replacing = 'replacing',
+  Replaced = 'replaced',
+  Running = 'running',
+  Refreshing = 'refreshing',
+  Refresh = 'refresh',
+  Failed = 'failed',
+  Unchanged = '',
 }
 
-// ============================================================================
-// Immutable Data Types
-// ============================================================================
-
-/**
- * Immutable Task interface
- */
-export interface Task {
-  readonly id: string
-  readonly name: string
-  readonly resourceType: string
-  readonly change: Change
-  readonly status: Status
-  readonly startTime: Date
-  readonly completedTime: Maybe<Date>
-  readonly message: Maybe<string>
-  readonly spinnerFrame: number
-}
-
-/**
- * Immutable TaskState
- */
-export interface TaskState {
-  readonly tasks: ReadonlyMap<string, Task>
-  readonly orderedIds: ReadonlyArray<string>
-}
-
-/**
- * Task update input
- */
 export interface TaskUpdate {
-  readonly id: string
-  readonly name?: string
-  readonly resourceType?: string
-  readonly change?: Change
-  readonly status?: Status
-  readonly message?: string
+  change: Change
+  resourceType: string
+  resourceName: string
+  status?: Status
+  time: string
+  message?: string
+}
+
+export interface Task {
+  change: Change
+  order: number
+  id: string
+  name: string
+  startTime: Date
+  completedTime?: Date
+  message?: string
+  status: Status
+  spinner: () => string
 }
 
 // ============================================================================
-// Pure Functions - State Management
+// State
 // ============================================================================
 
-/**
- * Create initial task state
- */
-export const createInitialState = (): TaskState => ({
-  tasks: new Map(),
-  orderedIds: [],
+const tasks = new Map<string, Task>()
+let orderedTasks: Task[] = []
+
+const updater = logUpdate({
+  height: process.stdout.rows,
+  width: process.stdout.columns,
 })
 
-/**
- * Get spinner frame at index
- */
-export const getSpinnerFrame = (frameIndex: number): string =>
-  cliSpinners.dots.frames[frameIndex % cliSpinners.dots.frames.length] ?? ''
-
-/**
- * Advance task spinner frame (pure - returns new task)
- */
-export const advanceSpinner = (task: Task): Task => ({
-  ...task,
-  spinnerFrame: (task.spinnerFrame + 1) % cliSpinners.dots.frames.length,
+// Handle resize
+process.stdout.on('resize', () => {
+  updater.resize({ width: process.stdout.columns, height: process.stdout.rows })
 })
 
-/**
- * Advance all spinners in state (pure - returns new state)
- */
-export const advanceAllSpinners = (state: TaskState): TaskState => {
-  const newTasks = new Map<string, Task>()
-  for (const [id, task] of state.tasks) {
-    newTasks.set(id, advanceSpinner(task))
+// Show cursor on exit
+process.on('exit', () => {
+  if (process.stdout.isTTY) {
+    process.stdout.write('\u001B[?25h')
   }
-  return { ...state, tasks: newTasks }
-}
+})
 
-/**
- * Check if a status indicates the task is complete
- */
-export const isCompleteStatus = (status: Status): boolean => {
-  switch (status._tag) {
-    case 'Created':
-    case 'Updated':
-    case 'Deleted':
-    case 'Replaced':
-    case 'Failed':
-    case 'Refresh':
-      return true
-    default:
-      return false
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+const createSpinner = (): (() => string) => {
+  let frameIndex = 0
+  return (): string => {
+    const frame = cliSpinners.dots.frames[frameIndex] as string
+    frameIndex = (frameIndex + 1) % cliSpinners.dots.frames.length
+    return frame
   }
 }
 
-/**
- * Update task in state (pure - returns new state)
- */
-export const updateTaskInState = (
-  state: TaskState,
-  update: TaskUpdate
-): TaskState => {
-  const existingTask = Maybe.fromNullable(state.tasks.get(update.id))
-
-  const isComplete = update.status ? isCompleteStatus(update.status) : false
-
-  const updatedTask: Task = existingTask
-    .map((existing): Task => ({
-      ...existing,
-      name: update.name ?? existing.name,
-      resourceType: update.resourceType ?? existing.resourceType,
-      change: update.change ?? existing.change,
-      status: update.status ?? existing.status,
-      message: update.message ? Maybe.of(update.message) : existing.message,
-      completedTime: isComplete ? Maybe.of(new Date()) : existing.completedTime,
-    }))
-    .orDefaultLazy((): Task => ({
-      id: update.id,
-      name: update.name ?? update.id,
-      resourceType: update.resourceType ?? 'unknown',
-      change: update.change ?? Change.Create,
-      status: update.status ?? Status.Creating,
-      startTime: new Date(),
-      completedTime: isComplete ? Maybe.of(new Date()) : Maybe.empty(),
-      message: update.message ? Maybe.of(update.message) : Maybe.empty(),
-      spinnerFrame: 0,
-    }))
-
-  const newTasks = new Map(state.tasks)
-  newTasks.set(update.id, updatedTask)
-
-  const orderedIds = state.orderedIds.includes(update.id)
-    ? state.orderedIds
-    : [...state.orderedIds, update.id]
-
-  return { tasks: newTasks, orderedIds }
+const formatResourceType = (type: string): string => {
+  // kubernetes:core/v1:Namespace -> Namespace
+  // pulumi:providers:kubernetes -> Provider
+  const parts = type.split(':')
+  return parts[parts.length - 1] || type
 }
 
-/**
- * Reset task state (pure - returns new empty state)
- */
-export const resetTasks = (): TaskState => createInitialState()
+const formatTask = (task: Task): string => {
+  const color = (() => {
+    switch (task.status) {
+      case Status.Failed:
+        return chalk.bold.red
+      case Status.Running:
+        return chalk.bold.green
+      default:
+    }
+
+    switch (task.change) {
+      case Change.Replace:
+      case Change.Create:
+        return chalk.bold.green
+      case Change.Update:
+        return chalk.bold.yellow
+      case Change.Delete:
+        return chalk.bold.red
+      default:
+        return chalk.grey
+    }
+  })()
+
+  const isRunning =
+    task.status === Status.Creating ||
+    task.status === Status.Updating ||
+    task.status === Status.Deleting ||
+    task.status === Status.Refreshing ||
+    task.status === Status.Running
+
+  const icon = isRunning
+    ? color(task.spinner())
+    : color(task.change === Change.Unchanged ? ' ' : task.change)
+
+  const completedTime = task.completedTime ?? new Date()
+  const delta = (completedTime.getTime() - task.startTime.getTime()) / 1000
+  const timeString = `(${delta.toFixed(1)}s)`
+
+  const resourceType = task.name.split(' ')[0] ?? ''
+  const resourceName = task.name.split(' ')[1] ?? ''
+
+  // Format: + ResourceType ResourceName status (time)
+  return `  ${icon} ${resourceType} ${resourceName} ${color(task.status)} ${chalk.dim(timeString)}`
+}
 
 // ============================================================================
-// Pure Functions - Formatting
+// Public API
 // ============================================================================
 
-/**
- * Get color for a task based on status and change
- */
-export const getTaskColor = (task: Task): chalk.Chalk => {
-  if (task.status._tag === 'Failed') return chalk.bold.red
+export const resetTasks = (): void => {
+  tasks.clear()
+  orderedTasks = []
+}
 
-  switch (task.change._tag) {
-    case 'Create':
-    case 'Replace':
-      return chalk.bold.green
-    case 'Update':
-      return chalk.bold.yellow
-    case 'Delete':
-      return chalk.bold.red
-    default:
-      return chalk.grey
+export const printRunningTasks = (toUpdater = true): void => {
+  const lines = orderedTasks.filter((task) => task.completedTime === undefined).map(formatTask)
+
+  if (toUpdater) {
+    const changes = updater.update(lines.join('\n'))
+    if (process.stdout.isTTY) {
+      process.stdout.write('\u001B[?25l') // hide cursor
+    }
+    process.stdout.write(changes)
+  } else if (lines.length > 0) {
+    console.log(lines.join('\n'))
   }
 }
 
-/**
- * Check if task is currently running
- */
-export const isTaskRunning = (task: Task): boolean =>
-  task.completedTime.isNothing()
-
-/**
- * Format a single task for display
- */
-export const formatTask = (task: Task): string => {
-  const color = getTaskColor(task)
-  const running = isTaskRunning(task)
-
-  const icon = running
-    ? color(getSpinnerFrame(task.spinnerFrame))
-    : color(task.change.symbol)
-
-  const endTime = task.completedTime.orDefault(new Date())
-  const delta = (endTime.getTime() - task.startTime.getTime()) / 1000
-  const timeStr = `(${delta.toFixed(1)}s)`
-
-  const type = formatResourceType(task.resourceType)
-  const statusLabel = task.status._tag.toLowerCase()
-
-  const message = task.message
-    .map((m) => ` ${chalk.gray(m)}`)
-    .orDefault('')
-
-  return `  ${icon} ${type} ${task.name} ${color(statusLabel)} ${chalk.dim(timeStr)}${message}`
+export const clearTaskLines = (): void => {
+  const changes = updater.update('')
+  process.stdout.write(changes)
 }
 
-/**
- * Get running tasks from state
- */
-export const getRunningTasks = (state: TaskState): ReadonlyArray<Task> =>
-  state.orderedIds
-    .map((id) => state.tasks.get(id))
-    .filter((task): task is Task => task !== undefined)
-    .filter(isTaskRunning)
+const printUpdate = (
+  isDynamic: boolean,
+  isComplete: boolean,
+  existingTask: Task | undefined,
+  updatedTask: Task
+): void => {
+  const isNewlyCompleted = isComplete && existingTask?.completedTime === undefined
 
-/**
- * Get completed tasks from state
- */
-export const getCompletedTasks = (state: TaskState): ReadonlyArray<Task> =>
-  state.orderedIds
-    .map((id) => state.tasks.get(id))
-    .filter((task): task is Task => task !== undefined)
-    .filter((task) => !isTaskRunning(task))
+  if (isNewlyCompleted) {
+    if (isDynamic) {
+      clearTaskLines()
+    }
 
-/**
- * Render all running task lines
- */
-export const renderTaskLines = (state: TaskState): string =>
-  getRunningTasks(state).map(formatTask).join('\n')
+    console.log(formatTask(updatedTask))
 
-// ============================================================================
-// Effects - Terminal I/O (side effects isolated here)
-// ============================================================================
-
-/**
- * Task printer interface
- */
-export interface TaskPrinter {
-  readonly print: (lines: string) => void
-  readonly clear: () => void
-  readonly showCursor: () => void
-  readonly hideCursor: () => void
+    if (isDynamic) {
+      printRunningTasks()
+    }
+  }
 }
 
-/**
- * Create task printer (encapsulates terminal side effects)
- */
-export const createTaskPrinter = (): TaskPrinter => {
-  const updater = logUpdate({
-    height: process.stdout.rows,
-    width: process.stdout.columns,
+export const processProgress = (update: TaskUpdate, isDynamic: boolean): void => {
+  // Filter out wrapper resources completely - don't even track them
+  const isWrapper =
+    update.resourceType === 'pulumi:pulumi:Stack' ||
+    update.resourceType.includes('pulumi:providers:') ||
+    update.resourceType.includes('pulumi:pulumi:')
+
+  if (isWrapper) {
+    return  // Skip entirely
+  }
+
+  const id = `${update.resourceType}:${update.resourceName}`
+  const prettyResourceType = formatResourceType(update.resourceType)
+  const name = `${prettyResourceType} ${update.resourceName}`
+
+  if (update.status === Status.Running || update.status === Status.Failed) {
+    update.change = Change.Running
+  }
+
+  const isComplete =
+    update.change === Change.Unchanged ||
+    update.status === Status.Unchanged ||
+    update.status === Status.Created ||
+    update.status === Status.Updated ||
+    update.status === Status.Replaced ||
+    update.status === Status.Deleted ||
+    update.status === Status.Failed ||
+    update.status === Status.Refresh
+
+  const existingTask = tasks.get(id)
+  const updatedTask: Task = {
+    id,
+    name,
+    change: update.change,
+    order: existingTask?.order ?? tasks.size,
+    startTime: existingTask?.startTime ?? new Date(),
+    spinner: existingTask?.spinner ?? createSpinner(),
+    message: update.message ?? existingTask?.message,
+    completedTime: isComplete ? existingTask?.completedTime ?? new Date() : undefined,
+    status: update.status ?? Status.Unchanged,
+  }
+  tasks.set(id, updatedTask)
+
+  orderedTasks = [...tasks.values()].sort((a, b) => {
+    const aUpdating =
+      a.status === Status.Creating ||
+      a.status === Status.Updating ||
+      a.status === Status.Deleting ||
+      a.status === Status.Refreshing ||
+      a.status === Status.Running
+
+    const bUpdating =
+      b.status === Status.Creating ||
+      b.status === Status.Updating ||
+      b.status === Status.Deleting ||
+      b.status === Status.Refreshing ||
+      b.status === Status.Running
+
+    if (aUpdating && !bUpdating) return 1
+    if (bUpdating && !aUpdating) return -1
+    return a.order - b.order
   })
 
-  // Handle terminal resize
-  process.stdout.on('resize', () => {
-    updater.resize({
-      width: process.stdout.columns,
-      height: process.stdout.rows,
-    })
-  })
-
-  return {
-    print: (lines: string): void => {
-      if (process.stdout.isTTY) {
-        process.stdout.write('\u001B[?25l') // hide cursor
-      }
-      process.stdout.write(updater.update(lines))
-    },
-
-    clear: (): void => {
-      process.stdout.write(updater.update(''))
-    },
-
-    showCursor: (): void => {
-      if (process.stdout.isTTY) {
-        process.stdout.write('\u001B[?25h')
-      }
-    },
-
-    hideCursor: (): void => {
-      if (process.stdout.isTTY) {
-        process.stdout.write('\u001B[?25l')
-      }
-    },
-  }
+  printUpdate(isDynamic, isComplete, existingTask, updatedTask)
 }

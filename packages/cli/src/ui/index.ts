@@ -7,9 +7,8 @@
 // Event streaming
 export * from './streams/event-bus'
 
-// UI Components
-export * from './components/progress-bar'
-export * from './components/grouped-output'
+// Formatters
+export * from './formatters'
 
 // UI Shell
 export * from './shell'
