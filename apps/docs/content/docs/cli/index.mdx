@@ -1,0 +1,50 @@
+---
+title: CLI Reference
+description: Pulumix command-line interface
+---
+
+The Pulumix CLI provides commands for deploying, developing, and managing your services.
+
+## Installation
+
+```bash
+npm install -g @pulumix/cli
+```
+
+Or use with `npx`:
+
+```bash
+npx @pulumix/cli deploy local
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| [`deploy`](/docs/cli/deploy) | Deploy services to a stack |
+| [`dev`](/docs/cli/dev) | Run services locally with HMR |
+| [`destroy`](/docs/cli/destroy) | Destroy a stack |
+
+## Global Options
+
+All commands support these options:
+
+- `-p, --path <path>` - Project root directory (default: current directory)
+- `-v, --verbose` - Enable verbose output
+- `-h, --help` - Show help for a command
+
+## Examples
+
+```bash
+# Deploy all services to local stack
+pulumix deploy local
+
+# Deploy specific services
+pulumix deploy local -s provider,api
+
+# Run services locally with hot reload
+pulumix dev local web-app,api
+
+# Destroy a stack
+pulumix destroy local -y
+```

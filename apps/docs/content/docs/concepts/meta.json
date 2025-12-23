@@ -1,0 +1,4 @@
+{
+  "title": "Concepts",
+  "pages": ["index", "discovery", "dependencies", "build-caching", "federation"]
+}

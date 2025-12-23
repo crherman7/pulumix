@@ -1,0 +1,65 @@
+---
+title: API Reference
+description: Pulumix TypeScript API
+---
+
+Every `pulumix.ts` file exports a default async function that receives a `ServiceContext` and returns a `ServiceResult`.
+
+```typescript title="pulumix.ts"
+import { ServiceContext, ServiceResult } from '@pulumix/core'
+
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  // Use ctx to access configuration, dependencies, and more
+  // Return outputs and resources
+
+  return {
+    outputs: {
+      url: 'http://example.com'
+    }
+  }
+}
+```
+
+## Core Types
+
+<Cards>
+  <Card title="ServiceContext" href="/docs/api/service-context" description="Input context for deployment" />
+  <Card title="ServiceResult" href="/docs/api/service-result" description="Return value from deployment" />
+</Cards>
+
+## Type-Safe Dependencies
+
+Services can export TypeScript interfaces for their outputs:
+
+```typescript title="@platform/postgres/pulumix.ts"
+export interface PostgresOutputs {
+  host: string
+  port: number
+  connectionString: string
+}
+
+export default async (ctx: ServiceContext): Promise<ServiceResult<PostgresOutputs>> => {
+  return {
+    outputs: {
+      host: 'postgres.default.svc.cluster.local',
+      port: 5432,
+      connectionString: 'postgresql://...'
+    }
+  }
+}
+```
+
+Consumers import the types:
+
+```typescript title="@my-app/api/pulumix.ts"
+import type { PostgresOutputs } from '@platform/postgres'
+
+interface ApiDependencies {
+  postgres: PostgresOutputs
+}
+
+export default async (ctx: ServiceContext<ApiDependencies>): Promise<ServiceResult> => {
+  const dbHost = ctx.dependencies.postgres.host  // Type-safe!
+  // ...
+}
+```

@@ -1,0 +1,41 @@
+---
+title: Concepts
+description: How Pulumix works
+---
+
+Pulumix orchestrates service deployments through several key concepts:
+
+<Cards>
+  <Card title="Auto-Discovery" href="/docs/concepts/discovery" description="How services are found" />
+  <Card title="Dependency Resolution" href="/docs/concepts/dependencies" description="How services are ordered" />
+  <Card title="Build Caching" href="/docs/concepts/build-caching" description="Content-based image caching" />
+  <Card title="Federation" href="/docs/concepts/federation" description="Sharing services via npm" />
+</Cards>
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Pulumix CLI                       │
+├─────────────────────────────────────────────────────┤
+│  Discovery → Dependencies → Build → Deploy          │
+├─────────────────────────────────────────────────────┤
+│                   Pulumix Core                       │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌───────────┐ │
+│  │ Scanner │ │ Resolver│ │ Builder │ │Orchestrator│ │
+│  └─────────┘ └─────────┘ └─────────┘ └───────────┘ │
+├─────────────────────────────────────────────────────┤
+│                    Pulumi SDK                        │
+├─────────────────────────────────────────────────────┤
+│                   Kubernetes                         │
+└─────────────────────────────────────────────────────┘
+```
+
+## Deployment Flow
+
+1. **Configuration** - Load stack and project settings
+2. **Discovery** - Scan for services in project and node_modules
+3. **Dependency Resolution** - Build graph, determine order
+4. **Bootstrap** - Ensure cluster resources exist
+5. **Build** - Build Docker images with content-based caching
+6. **Deploy** - Apply Pulumi resources in topological order

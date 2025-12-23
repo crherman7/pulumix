@@ -1,0 +1,76 @@
+---
+title: Dependency Resolution
+description: How Pulumix orders service deployments
+---
+
+Pulumix automatically determines deployment order based on npm dependencies.
+
+## Declaring Dependencies
+
+Services declare dependencies in `package.json`:
+
+```json title="services/api/package.json"
+{
+  "name": "@my-app/api",
+  "dependencies": {
+    "@pulumix/core": "workspace:*",
+    "@platform/postgres": "^1.0.0",
+    "@platform/redis": "^2.1.0"
+  }
+}
+```
+
+Pulumix filters to only include packages that are Pulumix services (have `pulumix.ts`).
+
+## Dependency Graph
+
+Given these services:
+
+- `api` depends on `postgres`, `redis`
+- `web` depends on `api`
+- `postgres` has no dependencies
+- `redis` has no dependencies
+
+Pulumix builds this graph:
+
+```
+postgres ─┐
+          ├─→ api ─→ web
+redis ────┘
+```
+
+And deploys in topological order:
+
+1. `postgres` and `redis` (parallel)
+2. `api`
+3. `web`
+
+## Type-Safe Outputs
+
+Dependency outputs are available via `ctx.dependencies`:
+
+```typescript title="services/api/pulumix.ts"
+import type { PostgresOutputs } from '@platform/postgres'
+import type { RedisOutputs } from '@platform/redis'
+
+interface ApiDependencies {
+  postgres: PostgresOutputs
+  redis: RedisOutputs
+}
+
+export default async (ctx: ServiceContext<ApiDependencies>) => {
+  // Type-safe access to dependency outputs
+  const dbUrl = ctx.dependencies.postgres.connectionString
+  const cacheUrl = ctx.dependencies.redis.url
+}
+```
+
+## Circular Dependencies
+
+Pulumix detects and rejects circular dependencies:
+
+```
+Error: Circular dependency detected: api → auth → api
+```
+
+Refactor to break the cycle, typically by extracting shared logic into a separate service.

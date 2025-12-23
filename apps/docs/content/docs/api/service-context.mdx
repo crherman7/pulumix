@@ -1,0 +1,155 @@
+---
+title: ServiceContext
+description: Input context for service deployment
+---
+
+The `ServiceContext` object is passed to every `pulumix.ts` function, providing access to configuration, dependencies, and deployment metadata.
+
+## Type Definition
+
+```typescript
+interface ServiceContext<TDeps = any> {
+  // Stack info
+  stackName: string                    // "local" | "production"
+  serviceName: string                  // "my-api"
+  namespace: string                    // "default"
+
+  // Service metadata
+  metadata: ServiceMetadata            // From pulumix.yaml
+  observability?: ObservabilityConfig  // Health, metrics, logs
+  security?: SecurityConfig            // Security settings
+
+  // Configuration
+  config: Record<string, unknown>      // Stack-specific config
+  globalConfig: Record<string, unknown> // Root pulumix.yaml config
+
+  // Dependencies
+  dependencies: TDeps                  // Typed outputs from dependencies
+
+  // Docker image (if Dockerfile exists)
+  image?: string                       // "registry:5000/my-api@sha256:abc123..."
+}
+```
+
+## Properties
+
+### `stackName`
+
+The current Pulumi stack name (e.g., `local`, `staging`, `production`).
+
+```typescript
+if (ctx.stackName === 'production') {
+  // Production-specific logic
+}
+```
+
+### `serviceName`
+
+The service name from `pulumix.yaml` metadata.
+
+### `namespace`
+
+The Kubernetes namespace for this deployment.
+
+### `metadata`
+
+Service metadata from `pulumix.yaml`:
+
+```typescript
+interface ServiceMetadata {
+  name: string
+  version: string
+  description?: string
+  team?: string
+  owner?: string
+  tags?: Record<string, string>
+}
+```
+
+### `observability`
+
+Observability configuration if defined:
+
+```typescript
+interface ObservabilityConfig {
+  health?: {
+    endpoint: string
+    port: number
+  }
+  metrics?: {
+    endpoint: string
+    format: string
+  }
+  logs?: {
+    format: string
+    level: string
+  }
+}
+```
+
+### `config`
+
+Stack-specific configuration from the service's `pulumix.yaml`:
+
+```yaml title="pulumix.yaml"
+stacks:
+  local:
+    replicas: 2
+    baseDomain: '127.0.0.1.sslip.io'
+```
+
+```typescript
+const replicas = ctx.config.replicas as number  // 2
+const domain = ctx.config.baseDomain as string  // '127.0.0.1.sslip.io'
+```
+
+### `globalConfig`
+
+Configuration from the root `pulumix.yaml`:
+
+```yaml title="pulumix.yaml (root)"
+stacks:
+  local:
+    namespace: dev
+```
+
+```typescript
+const ns = ctx.globalConfig.namespace as string  // 'dev'
+```
+
+### `dependencies`
+
+Outputs from dependent services. Type-safe when using generics:
+
+```typescript
+interface MyDependencies {
+  postgres: { connectionString: string }
+  redis: { url: string }
+}
+
+export default async (ctx: ServiceContext<MyDependencies>) => {
+  const dbUrl = ctx.dependencies.postgres.connectionString
+  const redisUrl = ctx.dependencies.redis.url
+}
+```
+
+### `image`
+
+The Docker image digest if a `Dockerfile` exists in the service directory:
+
+```typescript
+// registry:5000/my-api@sha256:abc123def456...
+const imageRef = ctx.image
+
+new k8s.apps.v1.Deployment('my-api', {
+  spec: {
+    template: {
+      spec: {
+        containers: [{
+          image: imageRef  // Guaranteed immutable reference
+        }]
+      }
+    }
+  }
+})
+```

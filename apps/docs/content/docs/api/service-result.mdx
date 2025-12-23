@@ -1,0 +1,118 @@
+---
+title: ServiceResult
+description: Return value from service deployment
+---
+
+The `ServiceResult` object is returned from every `pulumix.ts` function, containing outputs for dependent services and optional resource tracking.
+
+## Type Definition
+
+```typescript
+interface ServiceResult<TOutputs = any> {
+  // Outputs for dependent services
+  outputs?: TOutputs
+
+  // Pulumi resources (optional, for tracking)
+  resources?: any[]
+}
+```
+
+## Properties
+
+### `outputs`
+
+Values exposed to dependent services. These are passed to consumers via `ctx.dependencies`.
+
+```typescript title="@platform/postgres/pulumix.ts"
+export interface PostgresOutputs {
+  host: string
+  port: number
+  connectionString: string
+}
+
+export default async (ctx: ServiceContext): Promise<ServiceResult<PostgresOutputs>> => {
+  // ... create postgres resources
+
+  return {
+    outputs: {
+      host: 'postgres.default.svc.cluster.local',
+      port: 5432,
+      connectionString: pulumi.interpolate`postgresql://user:${password}@${host}:5432/db`
+    }
+  }
+}
+```
+
+<Callout type="info">
+Outputs can include Pulumi `Output<T>` values. They will be resolved before being passed to dependent services.
+</Callout>
+
+### `resources`
+
+Optional array of Pulumi resources created by this service. Used for tracking and dependency ordering.
+
+```typescript
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  const namespace = new k8s.core.v1.Namespace('my-ns', { ... })
+  const deployment = new k8s.apps.v1.Deployment('my-app', { ... })
+  const service = new k8s.core.v1.Service('my-svc', { ... })
+
+  return {
+    outputs: {
+      url: 'http://my-app.example.com'
+    },
+    resources: [namespace, deployment, service]
+  }
+}
+```
+
+## Examples
+
+### Minimal Result
+
+```typescript
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  new k8s.core.v1.ConfigMap('config', { ... })
+
+  return {}  // No outputs, no resource tracking
+}
+```
+
+### With Typed Outputs
+
+```typescript
+export interface ApiOutputs {
+  url: string
+  healthEndpoint: string
+}
+
+export default async (ctx: ServiceContext): Promise<ServiceResult<ApiOutputs>> => {
+  // ... create resources
+
+  return {
+    outputs: {
+      url: `http://${ctx.serviceName}.${ctx.config.baseDomain}`,
+      healthEndpoint: '/health'
+    }
+  }
+}
+```
+
+### With Pulumi Outputs
+
+```typescript
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  const secret = new k8s.core.v1.Secret('db-secret', {
+    stringData: {
+      password: randomPassword.result
+    }
+  })
+
+  return {
+    outputs: {
+      // Pulumi Output values are automatically resolved
+      connectionString: pulumi.interpolate`postgresql://user:${randomPassword.result}@host:5432/db`
+    }
+  }
+}
+```

@@ -318,14 +318,14 @@ Full access to Pulumi SDK. Any cloud, any resource.
 
 ## Example: Hello World
 
-See the [hello-world example](./examples/hello-world) for a complete multi-service deployment:
+See the [example project](./apps/example) for a complete multi-service deployment:
 
 - **provider** - Creates k3d cluster with local registry
 - **ingress** - Configures ingress (uses k3d's built-in Traefik)
 - **hello-world** - Builds and deploys HTTP service with Ingress
 
 ```bash
-cd examples/hello-world
+cd apps/example
 pnpm install
 pnpm run deploy local
 ```
@@ -360,13 +360,13 @@ Visit: http://hello-world.127.0.0.1.sslip.io/
 Run hello-world locally with HMR while the ingress routes to your machine:
 
 ```bash
-cd examples/hello-world
+cd apps/example
 pnpm run dev local hello-world
 ```
 
 ```
 pulumix dev
-/path/to/examples/hello-world
+/path/to/apps/example
 
 Configuration
   Stack:        local
@@ -538,7 +538,7 @@ pulumix dev local web-app
 pulumix dev local web-app,api
 
 # From different directory
-pulumix dev local hello-world -p ./examples/hello-world
+pulumix dev local hello-world -p ./apps/example
 ```
 
 **How it works:**
@@ -717,7 +717,7 @@ pnpm --filter @pulumix/cli build
 ### Run Example
 
 ```bash
-cd examples/hello-world
+cd apps/example
 pnpm run deploy local
 ```
 
@@ -728,8 +728,9 @@ pulumix/
 ├── packages/
 │   ├── core/          # Orchestrator, types, utilities
 │   └── cli/           # Command-line interface
-├── examples/
-│   └── hello-world/   # Example multi-service app
+├── apps/
+│   ├── docs/          # Documentation site (Fumadocs)
+│   └── example/       # Example multi-service app
 └── package.json       # Workspace root
 ```
 

@@ -1,0 +1,116 @@
+---
+title: Federation
+description: Share services via npm
+---
+
+Pulumix services can be published to npm and consumed across teams and repositories.
+
+## Publishing a Service
+
+### 1. Create the Service
+
+```
+my-postgres-service/
+├── pulumix.ts       # Deployment logic
+├── pulumix.yaml     # Service manifest
+└── package.json     # npm package config
+```
+
+### 2. Export Output Types
+
+```typescript title="pulumix.ts"
+export interface PostgresOutputs {
+  host: string
+  port: number
+  connectionString: string
+}
+
+export default async (ctx: ServiceContext): Promise<ServiceResult<PostgresOutputs>> => {
+  // ... create postgres resources
+
+  return {
+    outputs: {
+      host: 'postgres.default.svc.cluster.local',
+      port: 5432,
+      connectionString: 'postgresql://...'
+    }
+  }
+}
+```
+
+### 3. Configure package.json
+
+```json title="package.json"
+{
+  "name": "@my-company/postgres",
+  "version": "1.0.0",
+  "main": "pulumix.ts",
+  "keywords": ["pulumix-service"],
+  "dependencies": {
+    "@pulumix/core": "^1.0.0"
+  }
+}
+```
+
+### 4. Publish
+
+```bash
+npm publish --access public
+```
+
+## Consuming Published Services
+
+### 1. Install the Package
+
+```bash
+npm install @my-company/postgres
+```
+
+### 2. Add to Allowlist
+
+```yaml title="pulumix.yaml (root)"
+services:
+  allowed:
+    - "@my-company/*"
+```
+
+### 3. Declare Dependency
+
+```json title="services/api/package.json"
+{
+  "dependencies": {
+    "@my-company/postgres": "^1.0.0"
+  }
+}
+```
+
+### 4. Use in pulumix.ts
+
+```typescript title="services/api/pulumix.ts"
+import type { PostgresOutputs } from '@my-company/postgres'
+
+interface ApiDependencies {
+  postgres: PostgresOutputs
+}
+
+export default async (ctx: ServiceContext<ApiDependencies>) => {
+  const dbUrl = ctx.dependencies.postgres.connectionString
+  // ...
+}
+```
+
+## Local Development Override
+
+Local services always override npm packages:
+
+```
+services/postgres/pulumix.ts       # ✅ Used during development
+node_modules/@my-company/postgres/ # ❌ Ignored
+```
+
+This allows you to:
+
+1. Develop changes locally
+2. Test with your project
+3. Publish when ready
+4. Remove local copy to use published version

@@ -1,0 +1,57 @@
+---
+title: Auto-Discovery
+description: How Pulumix finds services
+---
+
+Pulumix automatically discovers services by scanning for `pulumix.ts` and `pulumix.yaml` files.
+
+## Discovery Locations
+
+```
+my-monorepo/
+├── services/api/
+│   ├── pulumix.ts      ✅ Found
+│   └── pulumix.yaml
+├── infra/postgres/
+│   ├── pulumix.ts      ✅ Found
+│   └── pulumix.yaml
+├── packages/shared/
+│   └── index.ts        ❌ No pulumix files
+└── node_modules/
+    └── @platform/redis/
+        ├── pulumix.ts  ✅ Found (if allowlisted)
+        └── pulumix.yaml
+```
+
+## How It Works
+
+1. **Project scan** - Recursively find all `pulumix.ts` files
+2. **Validate** - Check for corresponding `pulumix.yaml`
+3. **npm packages** - Scan `node_modules` for allowlisted packages
+4. **Dedupe** - Local services override npm packages with same name
+
+## npm Package Discovery
+
+Services in `node_modules` are only discovered if explicitly allowlisted:
+
+```yaml title="pulumix.yaml (root)"
+services:
+  allowed:
+    - "@platform/*"      # All @platform packages
+    - "@my-company/*"    # All @my-company packages
+```
+
+<Callout type="warn">
+This security measure prevents arbitrary npm packages from executing deployment code.
+</Callout>
+
+## Local Override
+
+If both local and npm versions exist, local wins:
+
+```
+services/redis/pulumix.ts       # ✅ Used
+node_modules/@platform/redis/   # ❌ Ignored
+```
+
+This enables local development while depending on published services.

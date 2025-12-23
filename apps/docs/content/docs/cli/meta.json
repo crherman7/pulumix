@@ -1,0 +1,4 @@
+{
+  "title": "CLI Reference",
+  "pages": ["index", "deploy", "dev", "destroy"]
+}

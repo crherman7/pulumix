@@ -1,0 +1,127 @@
+---
+title: Quick Start
+description: Create and deploy your first Pulumix service
+---
+
+This guide walks you through creating a simple service and deploying it to a local Kubernetes cluster.
+
+## Prerequisites
+
+- **Docker** (for building images)
+- **mise** (for tool management) - [install mise](https://mise.jdx.dev)
+
+All other tools (Node.js, pnpm, kubectl, k3d, Pulumi) are managed via mise.
+
+## Create a Service
+
+```bash
+mkdir -p services/my-api
+cd services/my-api
+```
+
+Create `pulumix.yaml`:
+
+```yaml title="pulumix.yaml"
+metadata:
+  name: my-api
+  version: 1.0.0
+  description: My API service
+
+observability:
+  health:
+    endpoint: /health
+    port: 3000
+
+stacks:
+  local:
+    replicas: 2
+    baseDomain: '127.0.0.1.sslip.io'
+```
+
+Create `pulumix.ts`:
+
+```typescript title="pulumix.ts"
+import * as k8s from '@pulumi/kubernetes'
+import { ServiceContext, ServiceResult } from '@pulumix/core'
+
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  const { serviceName, namespace, config, image } = ctx
+
+  const deployment = new k8s.apps.v1.Deployment(serviceName, {
+    metadata: { name: serviceName, namespace },
+    spec: {
+      replicas: config.replicas || 1,
+      selector: { matchLabels: { app: serviceName } },
+      template: {
+        metadata: { labels: { app: serviceName } },
+        spec: {
+          containers: [{
+            name: serviceName,
+            image,  // Digest-based: registry/name@sha256:...
+            ports: [{ containerPort: 3000 }]
+          }]
+        }
+      }
+    }
+  })
+
+  return {
+    outputs: {
+      url: `http://${serviceName}.${config.baseDomain}/`
+    },
+    resources: [deployment]
+  }
+}
+```
+
+## Deploy
+
+```bash
+pulumix deploy local
+```
+
+You'll see output like:
+
+```
+Configuration
+  • Stack: local
+  • Services: 1 service
+
+Discovery
+  + Found 1 service
+
+Dependencies
+  └─ my-api
+
+Build
+  + my-api (a1b2c3d4e5f6) created (3.2s)
+
+Deploy
+  + Namespace my-api created (0.5s)
+  + Deployment my-api created (1.8s)
+  + Service my-api created (0.3s)
+
+Summary
+
+  Resources:
+    3 created
+
+  Duration:
+    Configuration   0.1s
+    Discovery       0.2s
+    Dependencies    0.0s
+    Build           3.2s
+    Deploy          2.6s
+    ─────────────────────
+    Total           6.1s
+
+  + Deployment completed
+```
+
+## Next Steps
+
+<Cards>
+  <Card title="Service Structure" href="/docs/configuration/service-manifest" description="Learn about pulumix.yaml configuration" />
+  <Card title="Local Development" href="/docs/cli/dev" description="Run services locally with HMR" />
+  <Card title="Hello World Example" href="/docs/examples/hello-world" description="Full multi-service example" />
+</Cards>

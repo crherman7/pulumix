@@ -1,0 +1,51 @@
+---
+title: destroy
+description: Destroy a Pulumi stack
+---
+
+Destroy all resources in a Pulumi stack.
+
+## Usage
+
+```bash
+pulumix destroy <stack> [options]
+```
+
+## Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `stack` | Stack name to destroy (e.g., `local`) |
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-y, --yes` | Skip confirmation prompt |
+| `-p, --path <path>` | Project root (default: cwd) |
+
+## Examples
+
+```bash
+# Destroy with confirmation
+pulumix destroy local
+
+# Destroy without confirmation
+pulumix destroy local -y
+
+# Destroy from different directory
+pulumix destroy staging -p ./infra -y
+```
+
+## Behavior
+
+The destroy command:
+
+1. Discovers all services in the project
+2. Prompts for confirmation (unless `-y` is passed)
+3. Destroys all Pulumi resources in reverse dependency order
+4. Removes namespaces and other cluster resources
+
+<Callout type="warn">
+This operation is destructive and cannot be undone. All data in the stack will be permanently deleted.
+</Callout>

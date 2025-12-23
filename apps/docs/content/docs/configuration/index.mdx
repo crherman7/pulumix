@@ -1,0 +1,31 @@
+---
+title: Configuration
+description: Configure Pulumix projects and services
+---
+
+Pulumix uses YAML configuration files at two levels:
+
+1. **Project root** (`pulumix.yaml`) - Global settings, security allowlists, stack configuration
+2. **Service manifest** (`services/*/pulumix.yaml`) - Service-specific metadata, observability, stack overrides
+
+## File Locations
+
+```
+my-project/
+├── pulumix.yaml              # Project root config
+├── services/
+│   ├── api/
+│   │   ├── pulumix.yaml      # Service manifest
+│   │   └── pulumix.ts        # Deployment logic
+│   └── web/
+│       ├── pulumix.yaml
+│       └── pulumix.ts
+└── package.json
+```
+
+## Quick Reference
+
+<Cards>
+  <Card title="Project Config" href="/docs/configuration/project" description="Root pulumix.yaml settings" />
+  <Card title="Service Manifest" href="/docs/configuration/service-manifest" description="Service-specific configuration" />
+</Cards>

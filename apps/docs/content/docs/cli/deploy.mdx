@@ -1,0 +1,105 @@
+---
+title: deploy
+description: Deploy services to a stack
+---
+
+Deploy services to a Pulumi stack. This command discovers services, builds Docker images, and deploys them in dependency order.
+
+## Usage
+
+```bash
+pulumix deploy <stack> [options]
+```
+
+## Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `stack` | Stack name (e.g., `local`, `staging`, `production`) |
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `-p, --path <path>` | Project root (default: cwd) |
+| `-s, --services <list>` | Deploy specific services only (comma-separated) |
+| `-v, --verbose` | Verbose output |
+
+## Examples
+
+```bash
+# Deploy all services to local stack
+pulumix deploy local
+
+# Deploy specific services
+pulumix deploy local -s provider,api
+
+# Deploy from different directory
+pulumix deploy production -p ./infra
+
+# Verbose output
+pulumix deploy local -v
+```
+
+## Output
+
+```
+Configuration
+  • Stack: local
+  • Services: 3 services
+    • provider v1.0.0
+    • ingress v1.0.0
+    • hello-world v1.0.0
+
+Cluster
+  + hello-world created (2.1s)
+
+Build
+  + hello-world (a1b2c3d4e5f6) created (4.2s)
+
+Deploy
+  + Namespace hello-world created (0.5s)
+  + Deployment hello-world created (1.8s)
+  + Service hello-world created (0.3s)
+  + Ingress hello-world created (0.2s)
+
+Summary
+
+  Resources:
+    4 created
+
+  Duration:
+    Configuration   0.1s
+    Discovery       0.2s
+    Dependencies    0.0s
+    Build           4.2s
+    Deploy          2.8s
+    ─────────────────────
+    Total           7.3s
+
+  + Deployment completed
+```
+
+## Phases
+
+The deploy command runs through these phases:
+
+1. **Configuration** - Load stack configuration
+2. **Discovery** - Find all services in the project
+3. **Dependencies** - Build dependency graph
+4. **Bootstrap** - Create/verify cluster resources
+5. **Build** - Build Docker images (with caching)
+6. **Deploy** - Apply Pulumi resources to cluster
+
+## Smart Build Caching
+
+Pulumix uses content-based hashing to skip unchanged services:
+
+```
+Build
+  + my-api (a1b2c3d4e5f6) created (3.2s)    # First deploy
+  + my-api (a1b2c3d4e5f6) unchanged (0.1s)  # Second deploy - skipped
+  + my-api (b7c8d9e0f1a2) created (2.8s)    # After code change
+```
+
+Images are referenced by digest (`@sha256:...`) for guaranteed deployments.

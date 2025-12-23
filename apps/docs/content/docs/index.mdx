@@ -1,0 +1,41 @@
+---
+title: Introduction
+description: Build and deploy federated services on Kubernetes with TypeScript
+---
+
+Pulumix is a service orchestration framework built on Pulumi. It discovers services across your monorepo and node_modules, builds Docker images, and deploys them in dependency order—letting teams share and compose infrastructure like npm packages.
+
+## Why Pulumix?
+
+**Service-based infrastructure.** Each service owns its deployment logic in a `pulumix.ts` file. No centralized orchestration, no sprawling IaC monoliths.
+
+**Federated by design.** Publish services to npm. Import and compose them across teams and repos. Local services override published ones during development.
+
+**Type-safe dependencies.** Services export TypeScript interfaces for their outputs. Consumers get full IntelliSense when wiring services together.
+
+**Built on Pulumi.** Use the full Pulumi SDK—any cloud, any resource. Pulumix adds discovery, dependency resolution, and build orchestration on top.
+
+## Quick Install
+
+```bash title="CLI (for deployment)"
+npm install -g @pulumix/cli
+```
+
+```bash title="Core library (for service development)"
+npm install @pulumix/core
+```
+
+Or use the CLI directly with `npx`:
+
+```bash
+npx @pulumix/cli deploy local
+```
+
+## Next Steps
+
+<Cards>
+  <Card title="Quick Start" href="/docs/quick-start" description="Create and deploy your first service" />
+  <Card title="CLI Reference" href="/docs/cli" description="Available commands and options" />
+  <Card title="Configuration" href="/docs/configuration" description="Configure services and stacks" />
+  <Card title="Concepts" href="/docs/concepts" description="Learn how Pulumix works" />
+</Cards>

@@ -1,10 +1,11 @@
 {
-  "name": "hello-world-pulumix",
+  "name": "@pulumix/example",
   "version": "1.0.0",
-  "description": "Hello World example for Pulumix",
+  "description": "Pulumix example project",
   "private": true,
   "scripts": {
     "deploy": "pulumix deploy",
+    "dev": "pulumix dev",
     "destroy": "pulumix destroy"
   },
   "keywords": [

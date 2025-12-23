@@ -1,0 +1,73 @@
+---
+title: Build Caching
+description: Content-based Docker image caching
+---
+
+Pulumix uses content-based hashing to avoid unnecessary Docker builds.
+
+## How It Works
+
+1. **Hash source files** - Compute hash of all files in service directory
+2. **Check registry** - Look for image with matching tag
+3. **Skip or build** - Reuse existing image or build new one
+4. **Reference by digest** - Use `@sha256:...` for guaranteed immutability
+
+## Build Output
+
+```
+Build
+  + my-api (a1b2c3d4e5f6) created (3.2s)    # First deploy
+  + my-api (a1b2c3d4e5f6) unchanged (0.1s)  # Second deploy - skipped
+  + my-api (b7c8d9e0f1a2) created (2.8s)    # After code change
+```
+
+## Content Hash
+
+The hash includes:
+
+- All source files in the service directory
+- Dockerfile
+- package.json / package-lock.json
+
+Excluded:
+
+- `node_modules/`
+- `.git/`
+- Build outputs
+
+## Image Tags vs Digests
+
+**Tags are mutable.** `my-api:latest` can point to different images over time.
+
+**Digests are immutable.** `my-api@sha256:abc123...` always refers to the exact same image.
+
+Pulumix uses digests in Kubernetes manifests:
+
+```yaml
+containers:
+  - name: my-api
+    image: registry:5000/my-api@sha256:abc123def456...
+```
+
+This ensures Kubernetes always pulls the exact image that was just built—no stale cache issues.
+
+## Registry Integration
+
+Pulumix checks the registry before building:
+
+```typescript
+// 1. Compute content hash
+const hash = computeContentHash(serviceDir)
+
+// 2. Check if image exists
+const exists = await registryHasImage(`${registry}/${name}:${hash}`)
+
+// 3. Skip build if unchanged
+if (exists) {
+  return { skipped: true, digest: await getDigest(tag) }
+}
+
+// 4. Build and push
+await docker.build(...)
+await docker.push(...)
+```

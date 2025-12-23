@@ -1,0 +1,152 @@
+---
+title: Hello World
+description: Complete multi-service example
+---
+
+The example project demonstrates a complete Pulumix deployment with multiple services.
+
+## Overview
+
+Located in `apps/example/`, this project includes:
+
+- **provider** - Creates k3d cluster with local registry
+- **ingress** - Configures ingress (uses k3d's built-in Traefik)
+- **hello-world** - Builds and deploys HTTP service with Ingress
+
+## Running the Example
+
+```bash
+cd apps/example
+pnpm install
+pnpm run deploy local
+```
+
+## Expected Output
+
+```
+Configuration
+  • Stack: local
+  • Services: 3 services
+    • provider v1.0.0
+    • ingress v1.0.0
+    • hello-world v1.0.0
+
+Cluster
+  + hello-world created (2.1s)
+
+Build
+  + hello-world (a1b2c3d4e5f6) created (4.2s)
+
+Deploy
+  + Namespace hello-world created (0.5s)
+  + Deployment hello-world created (1.8s)
+  + Service hello-world created (0.3s)
+  + Ingress hello-world created (0.2s)
+
+  + Deployment completed
+```
+
+Visit: http://hello-world.127.0.0.1.sslip.io/
+
+## Local Development
+
+Run the service locally with HMR while the ingress routes to your machine:
+
+```bash
+pnpm run dev local hello-world
+```
+
+```
+pulumix dev
+/path/to/apps/example
+
+Configuration
+  Stack:        local
+  Dev Services: hello-world
+
+Discovery
+  └─ hello-world (local)
+
+Dev Mode Active
+
+  Dev Servers:
+    + hello-world -> http://localhost:3000
+
+  Ingress URLs (routed to local):
+    + http://hello-world.127.0.0.1.sslip.io
+
+Press Ctrl+C to stop
+
+  [hello-world] Server running on port 3000
+```
+
+Edit files and see changes instantly at http://hello-world.127.0.0.1.sslip.io/
+
+## Project Structure
+
+```
+apps/example/
+├── pulumix.yaml              # Root config
+├── package.json
+└── services/
+    ├── provider/
+    │   ├── pulumix.ts        # Creates k3d cluster
+    │   └── pulumix.yaml
+    ├── ingress/
+    │   ├── pulumix.ts        # Configures Traefik
+    │   └── pulumix.yaml
+    └── hello-world/
+        ├── pulumix.ts        # Deploys HTTP service
+        ├── pulumix.yaml
+        ├── Dockerfile
+        └── src/
+            └── index.js      # Express server
+```
+
+## Service Details
+
+### Provider
+
+Creates a k3d cluster with a local Docker registry:
+
+```typescript title="services/provider/pulumix.ts"
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  // Create k3d cluster
+  const cluster = new k3d.Cluster(ctx.serviceName, {
+    registry: { create: true }
+  })
+
+  return {
+    outputs: {
+      kubeconfig: cluster.kubeconfig,
+      registryUrl: cluster.registryUrl
+    }
+  }
+}
+```
+
+### Hello World
+
+Deploys an Express HTTP server:
+
+```typescript title="services/hello-world/pulumix.ts"
+export default async (ctx: ServiceContext): Promise<ServiceResult> => {
+  const { serviceName, namespace, config, image } = ctx
+
+  const deployment = new k8s.apps.v1.Deployment(serviceName, { ... })
+  const service = new k8s.core.v1.Service(serviceName, { ... })
+  const ingress = new k8s.networking.v1.Ingress(serviceName, { ... })
+
+  return {
+    outputs: {
+      url: `http://${serviceName}.${config.baseDomain}/`
+    }
+  }
+}
+```
+
+## Cleanup
+
+```bash
+pnpm run destroy local
+```

@@ -1,0 +1,76 @@
+---
+title: Project Configuration
+description: Root pulumix.yaml configuration
+---
+
+The root `pulumix.yaml` file configures global settings for your Pulumix project.
+
+## Full Example
+
+```yaml title="pulumix.yaml"
+name: my-project
+
+# Security: allowlist for published services
+services:
+  allowed:
+    - "@platform/*"
+    - "@my-company/*"
+
+# Stack configuration
+stacks:
+  local:
+    namespace: dev
+    baseDomain: '127.0.0.1.sslip.io'
+
+  staging:
+    namespace: staging
+    baseDomain: 'staging.example.com'
+
+  production:
+    namespace: prod
+    baseDomain: 'api.example.com'
+```
+
+## Fields
+
+### `name`
+
+Project name. Used for logging and identification.
+
+```yaml
+name: my-project
+```
+
+### `services.allowed`
+
+Security allowlist for published services from npm. Only packages matching these patterns can be discovered and deployed.
+
+```yaml
+services:
+  allowed:
+    - "@platform/*"      # All packages from @platform scope
+    - "@my-company/*"    # All packages from @my-company scope
+```
+
+<Callout type="info">
+This prevents arbitrary npm packages from executing deployment code. Only explicitly allowlisted packages are discovered in `node_modules`.
+</Callout>
+
+### `stacks`
+
+Per-environment configuration. Each key is a stack name (matching Pulumi stacks).
+
+```yaml
+stacks:
+  local:
+    namespace: dev
+    baseDomain: '127.0.0.1.sslip.io'
+    # Any custom config accessible via ctx.globalConfig
+
+  production:
+    namespace: prod
+    baseDomain: 'api.example.com'
+    replicas: 10
+```
+
+Stack configuration is available in `pulumix.ts` via `ctx.globalConfig`.
