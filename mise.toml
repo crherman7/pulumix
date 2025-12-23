@@ -1,0 +1,59 @@
+[tools]
+# Node.js runtime
+node = "22"
+
+# Package manager (corepack will handle pnpm version from packageManager field)
+# pnpm is enabled via corepack below
+
+# Kubernetes tools
+kubectl = "latest"
+k3d = "latest"
+
+# Infrastructure as code
+pulumi = "latest"
+
+[settings]
+# Enable experimental features
+experimental = true
+
+[tasks.setup]
+description = "Initial project setup"
+run = """
+#!/usr/bin/env bash
+set -e
+
+echo "Enabling corepack for pnpm..."
+corepack enable
+
+echo "Installing dependencies..."
+pnpm install
+
+echo "Building packages..."
+pnpm build
+
+echo "Setup complete!"
+"""
+
+[tasks.dev]
+description = "Start development (watch mode)"
+run = "pnpm build --watch"
+
+[tasks.build]
+description = "Build all packages"
+run = "pnpm build"
+
+[tasks.test]
+description = "Run tests"
+run = "pnpm test"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "pnpm clean"
+
+[tasks.lint]
+description = "Run linting and type checking"
+run = "pnpm typecheck"
+
+[tasks.knip]
+description = "Check for unused code and dependencies"
+run = "pnpm dlx knip"

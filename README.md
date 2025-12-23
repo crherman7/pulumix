@@ -305,8 +305,8 @@ Control which published services can execute. Glob pattern matching (`@platform/
 ### 🏷️ **Standard Metadata**
 Service manifests include team ownership, SLAs, observability config, and more.
 
-### ⚡ **Local Development**
-Local services override published ones. Develop and test without republishing.
+### ⚡ **Local Development with HMR**
+Run services locally with hot module replacement while dependencies run in the cluster. The ingress URL routes to your local machine for full-stack development with instant feedback.
 
 ### 🎛️ **Stack Configuration**
 Per-environment config (dev, staging, prod) in `pulumix.yaml`.
@@ -354,6 +354,41 @@ Deploy
 ```
 
 Visit: http://hello-world.127.0.0.1.sslip.io/
+
+### Local Development
+
+Run hello-world locally with HMR while the ingress routes to your machine:
+
+```bash
+cd examples/hello-world
+pnpm run dev local hello-world
+```
+
+```
+pulumix dev
+/path/to/examples/hello-world
+
+Configuration
+  Stack:        local
+  Dev Services: hello-world
+
+Discovery
+  └─ hello-world (local)
+
+Dev Mode Active
+
+  Dev Servers:
+    + hello-world -> http://localhost:3000
+
+  Ingress URLs (routed to local):
+    + http://hello-world.127.0.0.1.sslip.io
+
+Press Ctrl+C to stop
+
+  [hello-world] Server running on port 3000
+```
+
+Edit files and see changes instantly at http://hello-world.127.0.0.1.sslip.io/
 
 ---
 
@@ -431,6 +466,14 @@ observability:
     format: json
     level: info
 
+# Local development configuration
+dev:
+  command: npm run dev    # Command to run locally
+  port: 3000              # Dev server port
+  cwd: src                # Working directory (optional)
+  env:                    # Additional env vars (optional)
+    NODE_ENV: development
+
 stacks:
   local:
     replicas: 2
@@ -467,6 +510,83 @@ pulumix deploy local -s provider,api
 
 # Deploy from different directory
 pulumix deploy production -p ./infra
+```
+
+### Dev
+
+```bash
+pulumix dev <stack> <services> [options]
+```
+
+Run services locally with hot module replacement while dependencies run in the cluster. The cluster's ingress URL routes to your local machine for full-stack development.
+
+**Arguments:**
+- `<stack>` - Stack name (e.g., `local`)
+- `<services>` - Comma-separated list of services to run locally
+
+**Options:**
+- `-p, --path <path>` - Project root (default: cwd)
+- `-v, --verbose` - Verbose output
+
+**Examples:**
+
+```bash
+# Single service dev
+pulumix dev local web-app
+
+# Multiple services (full-stack dev)
+pulumix dev local web-app,api
+
+# From different directory
+pulumix dev local hello-world -p ./examples/hello-world
+```
+
+**How it works:**
+
+1. Discovers all services and their dependencies
+2. Computes which services run locally vs in cluster
+3. Sets up port-forwards to cluster services (databases, etc.)
+4. Scales down cluster deployments for dev services
+5. Patches Kubernetes Services to route to your local machine
+6. Starts local dev servers with injected environment variables
+7. Traffic to ingress URLs now hits your local dev server
+
+**Example output:**
+
+```
+pulumix dev
+/path/to/project
+
+Configuration
+  Stack:        local
+  Dev Services: hello-world
+
+Discovery
+  └─ hello-world (local)
+
+Dev Mode Active
+
+  Port Forwards:
+    + postgres:5432 -> localhost:5432
+
+  Dev Servers:
+    + hello-world -> http://localhost:3000
+
+  Ingress URLs (routed to local):
+    + http://hello-world.127.0.0.1.sslip.io
+
+Press Ctrl+C to stop
+```
+
+**Requirements:**
+
+Services must have a `dev` section in their `pulumix.yaml`:
+
+```yaml
+dev:
+  command: npm run dev    # Command to run locally
+  port: 3000              # Dev server port
+  cwd: src                # Working directory (optional)
 ```
 
 ### Destroy
@@ -648,12 +768,10 @@ pulumix/
 
 ## Requirements
 
-- **Node.js** 18 or later
-- **pnpm** (or npm/yarn)
 - **Docker** (for building images)
-- **Pulumi CLI** (automatically used)
-- **kubectl** (for Kubernetes deployments)
-- **k3d** (optional, for local Kubernetes)
+- **mise** (for tool management) - [install mise](https://mise.jdx.dev)
+
+All other tools (Node.js, pnpm, kubectl, k3d, Pulumi) are managed via mise.
 
 ---
 
@@ -664,11 +782,41 @@ Contributions welcome! Please open an issue or PR.
 ### Development Setup
 
 ```bash
+# Clone the repo
 git clone https://github.com/yourorg/pulumix.git
 cd pulumix
-pnpm install
-pnpm build
+
+# Install tools via mise
+mise trust
+mise install
+
+# Setup project (installs deps + builds)
+mise run setup
 ```
+
+### Available Tasks
+
+```bash
+mise run setup    # Initial project setup
+mise run build    # Build all packages
+mise run test     # Run tests
+mise run dev      # Watch mode
+mise run deploy   # Deploy hello-world to local
+mise run destroy  # Destroy local stack
+mise run clean    # Clean build artifacts
+mise run lint     # Type checking
+mise run knip     # Check for unused code
+```
+
+### Tools Managed by mise
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| node | 22 | JavaScript runtime |
+| pnpm | (via corepack) | Package manager |
+| kubectl | latest | Kubernetes CLI |
+| k3d | latest | Local Kubernetes |
+| pulumi | latest | Infrastructure as code |
 
 ---
 

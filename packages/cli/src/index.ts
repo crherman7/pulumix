@@ -14,6 +14,7 @@ import { listCommand } from './commands/list'
 import { validateCommand } from './commands/validate'
 import { inspectCommand } from './commands/inspect'
 import { graphCommand } from './commands/graph'
+import { devCommand } from './commands/dev'
 import chalk from 'chalk'
 
 /**
@@ -241,6 +242,16 @@ function main(): void {
     .option('-y, --yes', 'Skip confirmation prompt', false)
     .option('-v, --verbose', 'Enable verbose logging', false)
     .action(destroyCommand)
+
+  // Dev command
+  program
+    .command('dev')
+    .description('Run services locally with HMR (hot module replacement)')
+    .argument('<stack>', 'Stack name (e.g., local)')
+    .argument('<services>', 'Services to run locally (comma-separated)')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('-v, --verbose', 'Enable verbose logging', false)
+    .action(devCommand)
 
   // List command
   program

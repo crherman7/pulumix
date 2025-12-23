@@ -25,3 +25,6 @@ export * from './utils/kubernetes'
 
 // Docker utilities
 export * from './docker'
+
+// Dev mode
+export * from './dev'

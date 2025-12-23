@@ -221,6 +221,7 @@ export class UIShell {
    * Print section header
    */
   private printSection(phase: PhaseName): void {
+    if (!phase) return // Skip undefined phases
     if (this.sectionPrinted.has(phase)) return
 
     const name = SECTION_NAMES[phase] || phase
@@ -263,6 +264,8 @@ export class UIShell {
    * Print phase completion
    */
   private printPhaseComplete(phase: PhaseName, status: string): void {
+    if (!phase) return // Skip undefined phases
+
     const startTime = this.phaseStartTimes.get(phase) || Date.now()
     const duration = this.formatDuration(Date.now() - startTime)
 
@@ -331,8 +334,8 @@ export class UIShell {
       this.eventBus.onDiagnostic((event) => {
         if (event.phase === 'Deploy') {
           this.processDeployOutput(event.message)
-        } else if (event.phase === 'DependencyGraph') {
-          // Tree-style output - no bullet needed
+        } else if (event.phase === 'DependencyGraph' || event.phase === 'Discovery') {
+          // Tree-style output - dimmed
           console.log(`  ${chalk.dim(event.message)}`)
         } else if (event.phase) {
           // Show diagnostic under its section

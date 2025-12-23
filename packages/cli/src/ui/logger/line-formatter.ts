@@ -134,7 +134,7 @@ export const createLineProcessor = (type: 'dynamic' | 'static'): LineProcessor =
       }
 
       line = line.replace(/.*:/g, (title) => color(title))
-      console.log(line)
+      console.log(`  ${line}`)
       return true
     }
 
@@ -166,21 +166,21 @@ export const createLineProcessor = (type: 'dynamic' | 'static'): LineProcessor =
 
     if (line.startsWith('Resources:')) {
       line = line.replace(/.*:/g, (title) => color(title))
-      console.log(line)
+      console.log(`  ${line}`)
       block = Block.Resources
       return true
     }
 
     if (line.startsWith('Diagnostics:')) {
       line = line.replace(/.*:/g, (title) => color(title))
-      console.log(line)
+      console.log(`  ${line}`)
       block = Block.Diagnostics
       return true
     }
 
     if (line.startsWith('Duration:')) {
       line = line.replace(/.*:/g, (title) => color(title))
-      console.log(line)
+      console.log(`  ${line}`)
       block = Block.Duration
       return true
     }
@@ -232,15 +232,15 @@ export const createLineProcessor = (type: 'dynamic' | 'static'): LineProcessor =
       case Block.Diagnostics:
         if (line.trimStart().startsWith('warning:')) {
           line = line.replace('warning:', chalk.yellow('warning:'))
-          console.log(line)
+          console.log(`    ${line}`)
         } else if (line.trimStart().startsWith('error:')) {
           line = line.replace('error:', chalk.red('error:'))
-          console.log(line)
+          console.log(`    ${line}`)
         } else if (line.trimStart().startsWith('debug:')) {
           line = line.replace('debug:', chalk.gray('debug:'))
-          console.log(line)
+          console.log(`    ${line}`)
         } else {
-          console.log(line)
+          console.log(`    ${line}`)
         }
         break
 
@@ -251,7 +251,7 @@ export const createLineProcessor = (type: 'dynamic' | 'static'): LineProcessor =
       case Block.Resources:
         // Show resources summary
         if (line.length > 0) {
-          console.log(`  ${line}`)
+          console.log(`    ${line}`)
         }
         break
 
@@ -267,7 +267,7 @@ export const createLineProcessor = (type: 'dynamic' | 'static'): LineProcessor =
         const shouldSkip = skipPatterns.some(pattern => pattern.test(line))
 
         if (line.length > 0 && !shouldSkip) {
-          console.log(line)
+          console.log(`  ${line}`)
         }
     }
 
