@@ -53,7 +53,6 @@ async function deployCommand(
     // Set deployment config for pre-deployment summary
     const config: DeploymentConfig = {
       stackName,
-      environment: stackName,
       services: [], // Will be populated during discovery
       rootPath
     }

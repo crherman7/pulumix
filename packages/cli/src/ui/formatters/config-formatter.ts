@@ -11,10 +11,5 @@ import { DeploymentConfig } from './types'
  * Format deployment configuration summary
  */
 export function formatDeploymentConfig(config: DeploymentConfig): string {
-  const lines: string[] = []
-
-  lines.push(`  Stack:        ${chalk.cyan(config.stackName)}`)
-  lines.push(`  Environment:  ${chalk.cyan(config.environment)}`)
-
-  return lines.join('\n')
+  return `  Stack: ${chalk.cyan(config.stackName)}`
 }

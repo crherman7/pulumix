@@ -11,7 +11,6 @@ import { PhaseName, DiscoveredService } from '@pulumix/core'
  */
 export interface DeploymentConfig {
   readonly stackName: string
-  readonly environment: string
   readonly services: DiscoveredService[]
   readonly rootPath: string
 }
