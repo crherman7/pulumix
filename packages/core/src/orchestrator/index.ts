@@ -30,7 +30,13 @@ import {
   ServiceContext,
   ServiceDeployFn
 } from '../types/service'
-import type { ServiceMetadata, ObservabilityConfig, SecurityConfig } from '../types/manifest'
+import type {
+  ServiceMetadata,
+  ObservabilityConfig,
+  SecurityConfig,
+  BackendConfig,
+  ProjectConfig
+} from '../types/manifest'
 import { LocalWorkspace } from '@pulumi/pulumi/automation'
 import {
   buildImage,
@@ -84,14 +90,96 @@ interface K3dConfig {
 }
 
 /**
- * Root configuration from pulumix.yaml
+ * Default backend configuration - local file-based in dist/
  */
-interface RootConfig {
-  readonly name?: string
-  readonly stacks?: Record<string, Record<string, unknown>>
-  readonly services?: {
-    readonly allowed?: string[]
+const DEFAULT_BACKEND: BackendConfig = {
+  type: 'file',
+  path: 'dist/'
+}
+
+/**
+ * Resolve the backend URL for Pulumi from the configuration.
+ *
+ * Priority: stack-level backend > project-level backend > default (file://dist/)
+ */
+const resolveBackendUrl = (
+  rootPath: string,
+  projectConfig: ProjectConfig,
+  stackName: string
+): string => {
+  // Get stack-specific config
+  const stackConfig = projectConfig.stacks?.[stackName]
+
+  // Resolve backend: stack override > project default > hardcoded default
+  const backend: BackendConfig =
+    stackConfig?.backend ?? projectConfig.backend ?? DEFAULT_BACKEND
+
+  switch (backend.type) {
+    case 'file': {
+      const backendPath = backend.path ?? 'dist/'
+      const absolutePath = path.isAbsolute(backendPath)
+        ? backendPath
+        : path.join(rootPath, backendPath)
+      return `file://${absolutePath}`
+    }
+
+    case 's3': {
+      const prefix = backend.prefix ? `/${backend.prefix.replace(/^\//, '')}` : ''
+      const region = backend.region ? `?region=${backend.region}` : ''
+      return `s3://${backend.bucket}${prefix}${region}`
+    }
+
+    case 'gcs': {
+      const prefix = backend.prefix ? `/${backend.prefix.replace(/^\//, '')}` : ''
+      return `gs://${backend.bucket}${prefix}`
+    }
+
+    case 'azblob': {
+      const prefix = backend.prefix ? `/${backend.prefix.replace(/^\//, '')}` : ''
+      return `azblob://${backend.container}${prefix}`
+    }
+
+    case 'pulumi': {
+      // Pulumi Cloud backend
+      if (backend.org) {
+        return `https://app.pulumi.com/${backend.org}`
+      }
+      // Default Pulumi Cloud (uses PULUMI_ACCESS_TOKEN org)
+      return 'https://app.pulumi.com'
+    }
+
+    default: {
+      // Fallback to file backend
+      const defaultPath = path.join(rootPath, 'dist/')
+      return `file://${defaultPath}`
+    }
   }
+}
+
+/**
+ * Get the working directory for Pulumi based on backend type.
+ *
+ * For file backends, this is the backend path itself.
+ * For cloud backends, we use a local .pulumi directory for workspace files.
+ */
+const resolveWorkDir = (
+  rootPath: string,
+  projectConfig: ProjectConfig,
+  stackName: string
+): string => {
+  const stackConfig = projectConfig.stacks?.[stackName]
+  const backend: BackendConfig =
+    stackConfig?.backend ?? projectConfig.backend ?? DEFAULT_BACKEND
+
+  if (backend.type === 'file') {
+    const backendPath = backend.path ?? 'dist/'
+    return path.isAbsolute(backendPath)
+      ? backendPath
+      : path.join(rootPath, backendPath)
+  }
+
+  // For cloud backends, use dist/ for local workspace files
+  return path.join(rootPath, 'dist/')
 }
 
 // ============================================================================
@@ -853,7 +941,7 @@ export class Orchestrator {
       // Phase 1: Load root config
       this.eventEmitter.emitPhaseStart('configuration')
       const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as RootConfig
+      const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as ProjectConfig
       const stacks = rootConfig.stacks ?? {}
       const globalConfig = (stacks[config.stackName] as Record<string, unknown>) ?? {}
       this.eventEmitter.emitPhaseComplete('configuration')
@@ -1026,10 +1114,13 @@ export class Orchestrator {
         }
       }
 
-      // Use Pulumi Automation API
-      const pulumiDir = path.join(config.rootPath, '.pulumi')
-      if (!fs.existsSync(pulumiDir)) {
-        fs.mkdirSync(pulumiDir, { recursive: true })
+      // Resolve backend configuration
+      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
+      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
+      // Ensure working directory exists
+      if (!fs.existsSync(workDir)) {
+        fs.mkdirSync(workDir, { recursive: true })
       }
 
       const projectName = rootConfig.name ?? 'pulumix-project'
@@ -1041,11 +1132,11 @@ export class Orchestrator {
           program
         },
         {
-          workDir: pulumiDir,
+          workDir,
           projectSettings: {
             name: projectName,
             runtime: 'nodejs' as const,
-            backend: { url: `file://${pulumiDir}` }
+            backend: { url: backendUrl }
           }
         }
       )
@@ -1091,9 +1182,12 @@ export class Orchestrator {
 
       // Load root config
       const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as RootConfig
+      const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as ProjectConfig
 
-      const pulumiDir = path.join(config.rootPath, '.pulumi')
+      // Resolve backend configuration
+      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
+      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
       const projectName = rootConfig.name ?? 'pulumix-project'
 
       // Create empty program for destroy
@@ -1108,11 +1202,11 @@ export class Orchestrator {
           program
         },
         {
-          workDir: pulumiDir,
+          workDir,
           projectSettings: {
             name: projectName,
             runtime: 'nodejs' as const,
-            backend: { url: `file://${pulumiDir}` }
+            backend: { url: backendUrl }
           }
         }
       )

@@ -30,14 +30,14 @@ export interface ServiceSwapState {
 }
 
 /**
- * Get the state file path
+ * Get the state file path for dev mode crash recovery
  */
 function getStateFilePath(rootPath: string): string {
-  const pulumixDir = path.join(rootPath, '.pulumix')
-  if (!fs.existsSync(pulumixDir)) {
-    fs.mkdirSync(pulumixDir, { recursive: true })
+  const devStateDir = path.join(rootPath, 'dist', '.pulumix')
+  if (!fs.existsSync(devStateDir)) {
+    fs.mkdirSync(devStateDir, { recursive: true })
   }
-  return path.join(pulumixDir, 'dev-state.json')
+  return path.join(devStateDir, 'dev-state.json')
 }
 
 /**

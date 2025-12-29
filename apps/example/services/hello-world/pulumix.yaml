@@ -39,7 +39,7 @@ dev:
 stacks:
   local:
     # Runtime configuration (varies per environment)
-    replicas: 2
+    replicas: 5
     baseDomain: '127.0.0.1.sslip.io'
     ingressClassName: 'traefik'
     imagePullPolicy: 'IfNotPresent'

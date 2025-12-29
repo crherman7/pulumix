@@ -427,6 +427,11 @@ services/my-api/
 ```yaml
 name: my-project
 
+# Default backend for all stacks (optional)
+backend:
+  type: file
+  path: dist/
+
 # Security: allowlist for published services
 services:
   allowed:
@@ -437,9 +442,105 @@ services:
 stacks:
   local:
     namespace: dev
+    # Inherits file backend from project default
 
   production:
     namespace: prod
+    # Override backend for production
+    backend:
+      type: gcs
+      bucket: my-company-pulumi-state
+      prefix: production/
+```
+
+### Backend Configuration
+
+Pulumi state can be stored locally or in cloud storage. Configure at project level (applies to all stacks) or per-stack (overrides project default).
+
+**Priority:** stack backend → project backend → default (`file://dist/`)
+
+#### File Backend (Default)
+
+```yaml
+backend:
+  type: file
+  path: dist/  # Relative to project root
+```
+
+Local filesystem storage. Best for local development and single-developer workflows.
+
+#### AWS S3
+
+```yaml
+backend:
+  type: s3
+  bucket: my-pulumi-state
+  region: us-east-1        # Optional, uses AWS_REGION if not set
+  prefix: myproject/       # Optional path prefix
+```
+
+Requires AWS credentials via environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) or IAM role.
+
+#### Google Cloud Storage
+
+```yaml
+backend:
+  type: gcs
+  bucket: my-pulumi-state
+  prefix: myproject/       # Optional path prefix
+```
+
+Requires GCP credentials via `GOOGLE_CREDENTIALS` environment variable or application default credentials.
+
+#### Azure Blob Storage
+
+```yaml
+backend:
+  type: azblob
+  container: pulumi-state
+  prefix: myproject/       # Optional path prefix
+```
+
+Requires Azure credentials via environment variables or managed identity.
+
+#### Pulumi Cloud
+
+```yaml
+backend:
+  type: pulumi
+  org: myorg               # Optional, uses default org if not set
+```
+
+Uses Pulumi's managed service. Requires `PULUMI_ACCESS_TOKEN` environment variable.
+
+#### Per-Stack Backend Example
+
+```yaml
+name: my-project
+
+# Local file backend for development (default)
+backend:
+  type: file
+  path: dist/
+
+stacks:
+  local:
+    namespace: dev
+    # Uses file backend from project default
+
+  staging:
+    namespace: staging
+    backend:
+      type: s3
+      bucket: my-company-state
+      prefix: staging/
+
+  production:
+    namespace: prod
+    backend:
+      type: gcs
+      bucket: my-company-state
+      prefix: production/
 ```
 
 ### Service Manifest (`services/my-api/pulumix.yaml`)

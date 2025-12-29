@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreExportsUsedInFile": {
+    "interface": true,
+    "type": true
+  },
+  "tags": [
+    "-lintignore"
+  ],
+  "workspaces": {
+    ".": {},
+    "packages/core": {},
+    "packages/cli": {},
+    "apps/docs": {
+      "entry": ["source.config.ts", "src/**/*.{ts,tsx}"],
+      "project": ["**/*.{ts,tsx}"]
+    },
+    "apps/example": {
+      "entry": ["services/**/pulumix.ts"],
+      "project": ["**/*.ts"],
+      "ignore": ["services/**/src/**"],
+      "ignoreDependencies": ["@pulumi/pulumi"]
+    }
+  },
+  "ignoreDependencies": ["vitest"]
+}

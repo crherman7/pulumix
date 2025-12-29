@@ -2,6 +2,10 @@
 
 name: hello-world
 
+backend:
+  type: file
+  path: dist/
+
 # Security: allowlist for published services
 services:
   allowed:

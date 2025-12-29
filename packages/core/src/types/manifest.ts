@@ -357,6 +357,186 @@ export interface SecretsConfig {
   path?: string
 }
 
+// ============================================================================
+// Backend Configuration Types
+// ============================================================================
+
+/**
+ * Local file-based backend configuration.
+ *
+ * Stores Pulumi state on the local filesystem. Best for local development
+ * and single-developer workflows.
+ *
+ * @example
+ * ```yaml
+ * backend:
+ *   type: file
+ *   path: dist/   # relative to project root
+ * ```
+ */
+export interface FileBackendConfig {
+  type: 'file'
+  /** Path relative to project root (default: 'dist/') */
+  path?: string
+}
+
+/**
+ * AWS S3 backend configuration.
+ *
+ * Stores Pulumi state in an S3 bucket. Requires AWS credentials
+ * via environment variables or IAM role.
+ *
+ * @example
+ * ```yaml
+ * backend:
+ *   type: s3
+ *   bucket: my-pulumi-state
+ *   region: us-east-1
+ *   prefix: myproject/
+ * ```
+ */
+export interface S3BackendConfig {
+  type: 's3'
+  /** S3 bucket name */
+  bucket: string
+  /** AWS region (optional, uses AWS_REGION if not specified) */
+  region?: string
+  /** Path prefix within the bucket */
+  prefix?: string
+}
+
+/**
+ * Google Cloud Storage backend configuration.
+ *
+ * Stores Pulumi state in a GCS bucket. Requires GCP credentials
+ * via GOOGLE_CREDENTIALS or application default credentials.
+ *
+ * @example
+ * ```yaml
+ * backend:
+ *   type: gcs
+ *   bucket: my-pulumi-state
+ *   prefix: myproject/
+ * ```
+ */
+export interface GCSBackendConfig {
+  type: 'gcs'
+  /** GCS bucket name */
+  bucket: string
+  /** Path prefix within the bucket */
+  prefix?: string
+}
+
+/**
+ * Azure Blob Storage backend configuration.
+ *
+ * Stores Pulumi state in an Azure Blob container. Requires Azure credentials
+ * via environment variables or managed identity.
+ *
+ * @example
+ * ```yaml
+ * backend:
+ *   type: azblob
+ *   container: pulumi-state
+ *   prefix: myproject/
+ * ```
+ */
+export interface AzBlobBackendConfig {
+  type: 'azblob'
+  /** Azure Blob container name */
+  container: string
+  /** Path prefix within the container */
+  prefix?: string
+}
+
+/**
+ * Pulumi Cloud backend configuration.
+ *
+ * Uses Pulumi's managed service for state storage. Requires PULUMI_ACCESS_TOKEN.
+ *
+ * @example
+ * ```yaml
+ * backend:
+ *   type: pulumi
+ *   org: myorg  # optional, uses default org if not specified
+ * ```
+ */
+export interface PulumiCloudBackendConfig {
+  type: 'pulumi'
+  /** Pulumi organization name (optional) */
+  org?: string
+}
+
+/**
+ * Union type for all backend configurations.
+ */
+export type BackendConfig =
+  | FileBackendConfig
+  | S3BackendConfig
+  | GCSBackendConfig
+  | AzBlobBackendConfig
+  | PulumiCloudBackendConfig
+
+/**
+ * Stack-specific configuration with optional backend override.
+ */
+export interface StackConfig {
+  /** Kubernetes namespace for this stack */
+  namespace?: string
+  /** Backend configuration (overrides project-level default) */
+  backend?: BackendConfig
+  /** Additional stack-specific settings */
+  [key: string]: unknown
+}
+
+/**
+ * Root project configuration (pulumix.yaml at project root).
+ *
+ * Defines project-wide settings including default backend and stack configurations.
+ *
+ * @example
+ * ```yaml
+ * name: my-project
+ *
+ * # Project-level default backend (inherited by all stacks)
+ * backend:
+ *   type: file
+ *   path: dist/
+ *
+ * services:
+ *   allowed:
+ *     - "@platform/*"
+ *
+ * stacks:
+ *   local:
+ *     namespace: my-project-dev
+ *     # Inherits file backend from project default
+ *
+ *   production:
+ *     namespace: my-project-prod
+ *     backend:
+ *       type: gcs
+ *       bucket: my-company-pulumi-state
+ *       prefix: production/
+ * ```
+ */
+export interface ProjectConfig {
+  /** Project name */
+  name?: string
+  /** Default backend configuration (can be overridden per stack) */
+  backend?: BackendConfig
+  /** Allowlist for published services */
+  services?: {
+    allowed?: string[]
+  }
+  /** Stack-specific configurations */
+  stacks?: Record<string, StackConfig>
+}
+
+// ============================================================================
+// Service Manifest Types
+// ============================================================================
+
 /**
  * Complete service manifest.
  *
