@@ -313,38 +313,19 @@ Pulumix scans `node_modules` and deploys published services alongside local ones
 
 ## Features
 
-### 🔍 **Auto-Discovery**
-Glob-based discovery finds services anywhere in your monorepo. No configuration needed.
-
-### 📦 **Federated Services**
-Publish services to npm. Share infrastructure across teams and repos.
-
-### 🔗 **Dependency Management**
-Declare dependencies in `package.json`. Pulumix resolves and deploys in order.
-
-### 🎯 **Type-Safe Contracts**
-Export TypeScript interfaces. Get IntelliSense when wiring services together.
-
-### 🐳 **Smart Docker Builds**
-Content-based build caching skips unchanged services. Images are tagged with content hashes and referenced by digest for guaranteed deployments.
-
-### 🔐 **Security Allowlist**
-Control which published services can execute. Glob pattern matching (`@platform/*`).
-
-### 🏷️ **Standard Metadata**
-Service manifests include team ownership, SLAs, observability config, and more.
-
-### ⚡ **Local Development with HMR**
-Run services locally with hot module replacement while dependencies run in the cluster. The ingress URL routes to your local machine for full-stack development with instant feedback.
-
-### 🎛️ **Stack Configuration**
-Per-environment config (dev, staging, prod) in `pulumix.yaml`.
-
-### 🪝 **Lifecycle Hooks**
-Run scripts at deployment stages (`pre-build`, `post-build`, `pre-deploy`, `post-deploy`). Infrastructure-agnostic—use any tools (k3d, kind, AWS CLI, etc.).
-
-### 🚀 **Built on Pulumi**
-Full access to Pulumi SDK. Any cloud, any resource.
+| Feature | What it gives you |
+| --- | --- |
+| Auto-Discovery | Glob-based discovery finds services anywhere in your monorepo. |
+| Federated Services | Publish services to npm and share infrastructure across teams. |
+| Dependency Management | Declare dependencies in `package.json` and deploy in order. |
+| Type-Safe Contracts | Export TypeScript interfaces with full IntelliSense. |
+| Smart Docker Builds | Content-hash caching, digest-pinned images, deterministic deploys. |
+| Security Allowlist | Control which published services can execute (`@platform/*`). |
+| Standard Metadata | Ownership, SLAs, observability, and other service metadata. |
+| Local Dev with HMR | Run services locally while dependencies run in-cluster. |
+| Stack Configuration | Per-environment config (dev, staging, prod) in `pulumix.yaml`. |
+| Lifecycle Hooks | Script `pre-build`/`post-build`/`pre-deploy`/`post-deploy`. |
+| Built on Pulumi | Full access to Pulumi SDK across clouds and providers. |
 
 ---
 
