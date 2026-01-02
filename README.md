@@ -1,8 +1,24 @@
+<p align="center">
+  <img src=".github/assets/pulumix_banner.png" alt="Pulumix" width="100%" />
+</p>
+
+<p align="center">
+  <strong>Build and deploy federated services with TypeScript</strong>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#cli-reference">CLI Reference</a> •
+  <a href="#documentation">Docs</a>
+</p>
+
+---
+
 # Pulumix
 
-**Build and deploy federated services on Kubernetes with TypeScript**
-
-Pulumix is a service orchestration framework built on Pulumi. It discovers services across your monorepo and node_modules, builds Docker images, and deploys them in dependency order—letting teams share and compose infrastructure like npm packages.
+Pulumix is a service orchestration framework built on Pulumi. It discovers services across your monorepo and node_modules, builds container images, and deploys them in dependency order—letting teams share and compose infrastructure like npm packages.
 
 ```bash
 npm install -g @pulumix/cli
@@ -77,12 +93,13 @@ import * as k8s from '@pulumi/kubernetes'
 import { ServiceContext, ServiceResult } from '@pulumix/core'
 
 export default async (ctx: ServiceContext): Promise<ServiceResult> => {
-  const { serviceName, namespace, config, image } = ctx
+  const { serviceName, config, image, globalConfig } = ctx
+  const namespace = (globalConfig.namespace as string) || ctx.stackName
 
   const deployment = new k8s.apps.v1.Deployment(serviceName, {
     metadata: { name: serviceName, namespace },
     spec: {
-      replicas: config.replicas || 1,
+      replicas: (config.replicas as number) || 1,
       selector: { matchLabels: { app: serviceName } },
       template: {
         metadata: { labels: { app: serviceName } },
@@ -784,7 +801,6 @@ interface ServiceContext<TDeps = any> {
   // Stack info
   stackName: string                    // "local" | "production"
   serviceName: string                  // "my-api"
-  namespace: string                    // "default"
 
   // Service metadata
   metadata: ServiceMetadata            // From pulumix.yaml
@@ -792,8 +808,8 @@ interface ServiceContext<TDeps = any> {
   security?: SecurityConfig            // Security settings
 
   // Configuration
-  config: Record<string, unknown>      // Stack-specific config
-  globalConfig: Record<string, unknown> // Root pulumix.yaml config
+  config: Record<string, unknown>      // Stack-specific config from service pulumix.yaml
+  globalConfig: Record<string, unknown> // Stack config from root pulumix.yaml
 
   // Dependencies
   dependencies: TDeps                  // Typed outputs from dependencies
@@ -801,6 +817,13 @@ interface ServiceContext<TDeps = any> {
   // Docker image (if Dockerfile exists)
   image?: string                       // "registry:5000/my-api@sha256:abc123..."
 }
+```
+
+Access stack configuration values via `globalConfig`:
+
+```typescript
+const namespace = ctx.globalConfig.namespace as string
+const baseDomain = ctx.globalConfig.baseDomain as string
 ```
 
 ### ServiceResult

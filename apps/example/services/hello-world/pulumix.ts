@@ -32,7 +32,7 @@ export interface HelloWorldOutputs {
 
 export default async (ctx: ServiceContext<HelloWorldDependencies>): Promise<ServiceResult<HelloWorldOutputs>> => {
   const name = ctx.serviceName
-  const namespace = ctx.namespace
+  const namespace = (ctx.globalConfig.namespace as string) || ctx.stackName
 
   // Access typed dependencies (with intellisense!)
   // const providerRegistry = ctx.dependencies.provider.registry

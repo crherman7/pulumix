@@ -15,6 +15,7 @@ export * from './types/events'
 
 // Validation
 export * from './validation/manifest'
+export * from './validation/project'
 
 // Orchestrator
 export * from './orchestrator'

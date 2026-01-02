@@ -21,6 +21,7 @@ import {
   DeployError
 } from '../types/errors'
 import { validateServiceManifest } from '../validation/manifest'
+import { validateProjectConfig } from '../validation/project'
 import { OrchestratorEventEmitter, createEventEmitter } from './events'
 import {
   DiscoveredService,
@@ -790,10 +791,11 @@ export class Orchestrator {
       // Validate environment
       await liftEither(this.validateEnvironment(config.stackName))
 
-      // Phase 1: Load root config
+      // Phase 1: Load and validate root config
       this.eventEmitter.emitPhaseStart('configuration')
       const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as ProjectConfig
+      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
+      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
       const stacks = rootConfig.stacks ?? {}
       const globalConfig = (stacks[config.stackName] as Record<string, unknown>) ?? {}
       this.eventEmitter.emitPhaseComplete('configuration')
@@ -1014,7 +1016,6 @@ export class Orchestrator {
       // Phase 6: Run Pulumi deployment
       this.eventEmitter.emitPhaseStart('deployment')
 
-      const namespace = getConfigValue<string>(globalConfig, 'namespace').orDefault(config.stackName)
       const outputs: Record<string, Record<string, unknown>> = {}
 
       // Create Pulumi program that runs all services
@@ -1030,7 +1031,6 @@ export class Orchestrator {
             security: service.security,
             config: resolved.stackConfig,
             globalConfig,
-            namespace,
             dependencies: outputs,
             image: builtImages[service.name]
           }
@@ -1133,9 +1133,10 @@ export class Orchestrator {
       // Validate environment
       await liftEither(this.validateEnvironment(config.stackName))
 
-      // Load root config
+      // Load and validate root config
       const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rootConfig = await liftEither(parseYamlFile(rootConfigPath)) as ProjectConfig
+      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
+      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
 
       // Resolve backend configuration
       const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)

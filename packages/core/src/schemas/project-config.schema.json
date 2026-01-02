@@ -1,0 +1,200 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pulumix.dev/schemas/project-config.json",
+  "title": "Pulumix Project Configuration",
+  "description": "Root configuration for a Pulumix project (pulumix.yaml at project root)",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Project name, used as Pulumi project name"
+    },
+    "backend": {
+      "$ref": "#/definitions/backend",
+      "description": "Default backend for Pulumi state storage"
+    },
+    "services": {
+      "type": "object",
+      "description": "Service discovery configuration",
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "description": "Allowlist patterns for published services from npm",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["@platform/*", "@my-company/*"]]
+        }
+      }
+    },
+    "stacks": {
+      "type": "object",
+      "description": "Per-stack configuration",
+      "additionalProperties": {
+        "$ref": "#/definitions/stackConfig"
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "description": "Lifecycle hooks per stack",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/hookDefinition"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "backend": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Local file backend",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "const": "file"
+            },
+            "path": {
+              "type": "string",
+              "description": "Path relative to project root",
+              "default": "dist/"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "AWS S3 backend",
+          "required": ["type", "bucket"],
+          "properties": {
+            "type": {
+              "const": "s3"
+            },
+            "bucket": {
+              "type": "string",
+              "description": "S3 bucket name"
+            },
+            "region": {
+              "type": "string",
+              "description": "AWS region"
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Path prefix within the bucket"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Google Cloud Storage backend",
+          "required": ["type", "bucket"],
+          "properties": {
+            "type": {
+              "const": "gcs"
+            },
+            "bucket": {
+              "type": "string",
+              "description": "GCS bucket name"
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Path prefix within the bucket"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Azure Blob Storage backend",
+          "required": ["type", "container"],
+          "properties": {
+            "type": {
+              "const": "azblob"
+            },
+            "container": {
+              "type": "string",
+              "description": "Azure Blob container name"
+            },
+            "prefix": {
+              "type": "string",
+              "description": "Path prefix within the container"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Pulumi Cloud backend",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "const": "pulumi"
+            },
+            "org": {
+              "type": "string",
+              "description": "Pulumi organization name"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "stackConfig": {
+      "type": "object",
+      "description": "Stack-specific configuration",
+      "properties": {
+        "backend": {
+          "$ref": "#/definitions/backend",
+          "description": "Override default backend for this stack"
+        }
+      },
+      "additionalProperties": true
+    },
+    "hookDefinition": {
+      "type": "object",
+      "description": "Lifecycle hook definition",
+      "required": ["stage", "run"],
+      "properties": {
+        "stage": {
+          "type": "string",
+          "enum": ["pre-build", "post-build", "pre-deploy", "post-deploy"],
+          "description": "When to run this hook"
+        },
+        "run": {
+          "type": "string",
+          "description": "Command or script to run"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description shown in CLI output"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory relative to project root"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in milliseconds",
+          "default": 300000,
+          "minimum": 0
+        },
+        "continueOnFailure": {
+          "type": "boolean",
+          "description": "Continue deployment if hook fails",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

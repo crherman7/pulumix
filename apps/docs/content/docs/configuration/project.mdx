@@ -10,35 +10,95 @@ The root `pulumix.yaml` file configures global settings for your Pulumix project
 ```yaml title="pulumix.yaml"
 name: my-project
 
-# Security: allowlist for published services
+backend:
+  type: file
+  path: dist/
+
 services:
   allowed:
     - "@platform/*"
     - "@my-company/*"
 
-# Stack configuration
 stacks:
   local:
     namespace: dev
+    hostRegistry: localhost:5001
+    clusterRegistry: my-registry:5000
     baseDomain: '127.0.0.1.sslip.io'
-
-  staging:
-    namespace: staging
-    baseDomain: 'staging.example.com'
 
   production:
     namespace: prod
     baseDomain: 'api.example.com'
+    backend:
+      type: s3
+      bucket: my-pulumi-state
+      region: us-east-1
+
+hooks:
+  local:
+    - stage: pre-build
+      run: "./scripts/ensure-cluster.sh"
+      description: Ensure local cluster
+      env:
+        CLUSTER_NAME: my-cluster
 ```
 
 ## Fields
 
 ### `name`
 
-Project name. Used for logging and identification.
+Project name. Used as the Pulumi project name and for logging.
 
 ```yaml
 name: my-project
+```
+
+### `backend`
+
+Default backend for Pulumi state storage. Can be overridden per-stack.
+
+#### File Backend (Local)
+
+```yaml
+backend:
+  type: file
+  path: dist/  # relative to project root
+```
+
+#### S3 Backend
+
+```yaml
+backend:
+  type: s3
+  bucket: my-pulumi-state
+  region: us-east-1      # optional, uses AWS_REGION if not set
+  prefix: myproject/     # optional path prefix
+```
+
+#### Google Cloud Storage Backend
+
+```yaml
+backend:
+  type: gcs
+  bucket: my-pulumi-state
+  prefix: myproject/     # optional path prefix
+```
+
+#### Azure Blob Storage Backend
+
+```yaml
+backend:
+  type: azblob
+  container: pulumi-state
+  prefix: myproject/     # optional path prefix
+```
+
+#### Pulumi Cloud Backend
+
+```yaml
+backend:
+  type: pulumi
+  org: myorg  # optional, uses default org if not set
 ```
 
 ### `services.allowed`
@@ -58,14 +118,15 @@ This prevents arbitrary npm packages from executing deployment code. Only explic
 
 ### `stacks`
 
-Per-environment configuration. Each key is a stack name (matching Pulumi stacks).
+Per-environment configuration. Each key is a stack name (matching Pulumi stacks). Values are arbitrary key-value pairs accessible via `ctx.globalConfig` in services.
 
 ```yaml
 stacks:
   local:
     namespace: dev
+    hostRegistry: localhost:5001
+    clusterRegistry: my-registry:5000
     baseDomain: '127.0.0.1.sslip.io'
-    # Any custom config accessible via ctx.globalConfig
 
   production:
     namespace: prod
@@ -73,4 +134,82 @@ stacks:
     replicas: 10
 ```
 
-Stack configuration is available in `pulumix.ts` via `ctx.globalConfig`.
+Stack configuration is available in `pulumix.ts` via `ctx.globalConfig`:
+
+```typescript
+// Access any stack config value
+const namespace = ctx.globalConfig.namespace as string
+const baseDomain = ctx.globalConfig.baseDomain as string
+const replicas = (ctx.globalConfig.replicas as number) || 1
+```
+
+#### Stack-Level Backend Override
+
+Each stack can override the default backend:
+
+```yaml
+stacks:
+  local:
+    namespace: dev
+    # Uses default backend (file)
+
+  production:
+    namespace: prod
+    backend:
+      type: s3
+      bucket: prod-pulumi-state
+      region: us-east-1
+```
+
+#### Registry Configuration
+
+For Docker image builds, configure host and cluster registries:
+
+```yaml
+stacks:
+  local:
+    hostRegistry: localhost:5001      # Registry for building/pushing
+    clusterRegistry: my-registry:5000 # Registry seen from inside cluster
+```
+
+### `hooks`
+
+Lifecycle hooks that run shell commands at specific stages. Hooks are defined per-stack.
+
+```yaml
+hooks:
+  local:
+    - stage: pre-build
+      run: "./scripts/ensure-cluster.sh"
+      description: Ensure local cluster
+      env:
+        CLUSTER_NAME: my-cluster
+        REGISTRY_PORT: "5001"
+      timeout: 300000        # 5 minutes (default)
+      continueOnFailure: false
+
+  production:
+    - stage: pre-deploy
+      run: "./scripts/check-credentials.sh"
+```
+
+#### Hook Stages
+
+| Stage | When it runs |
+|-------|--------------|
+| `pre-build` | Before Docker images are built |
+| `post-build` | After Docker images are built |
+| `pre-deploy` | Before Pulumi deployment |
+| `post-deploy` | After Pulumi deployment |
+
+#### Hook Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `stage` | string | required | When to run the hook |
+| `run` | string | required | Command or script to execute |
+| `description` | string | - | Description shown in CLI output |
+| `env` | object | - | Environment variables |
+| `cwd` | string | project root | Working directory |
+| `timeout` | number | 300000 | Timeout in milliseconds |
+| `continueOnFailure` | boolean | false | Continue if hook fails |

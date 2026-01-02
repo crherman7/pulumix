@@ -228,14 +228,17 @@
             }
           }
         },
-        "rbac": {
+        "accessControl": {
           "type": "object",
+          "description": "Access control configuration",
           "properties": {
-            "serviceAccount": {
-              "type": "string"
+            "identity": {
+              "type": "string",
+              "description": "Service identity (e.g., service account, IAM role)"
             },
             "roles": {
               "type": "array",
+              "description": "Required roles or permissions",
               "items": {
                 "type": "string"
               }

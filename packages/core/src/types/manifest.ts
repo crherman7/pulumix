@@ -194,14 +194,15 @@ export interface DeprecatedField {
  * Observability configuration.
  *
  * Defines health check, metrics, and logging configuration for the service.
- * Used to configure Kubernetes probes and monitoring integrations.
+ * Services can use this configuration to set up health probes, metrics
+ * endpoints, and logging for their target infrastructure.
  *
  * @see {@link HealthConfig} for health check settings
  * @see {@link MetricsConfig} for metrics settings
  * @see {@link LogsConfig} for logging settings
  *
  * @example
- * Complete observability configuration in pulumix.yaml:
+ * Observability configuration in pulumix.yaml:
  * ```yaml
  * observability:
  *   health:
@@ -270,11 +271,12 @@ export interface LogsConfig {
 /**
  * Security policies.
  *
- * Defines network policies, RBAC, and secrets management configuration.
- * Translated into Kubernetes NetworkPolicy and RBAC resources.
+ * Defines network policies, access control, and secrets management configuration.
+ * Services can use this configuration to implement security policies for their
+ * target infrastructure.
  *
  * @see {@link NetworkPolicyConfig} for network policy settings
- * @see {@link RBACConfig} for role-based access control
+ * @see {@link AccessControlConfig} for access control
  * @see {@link SecretsConfig} for secrets management
  *
  * @example
@@ -284,16 +286,14 @@ export interface LogsConfig {
  *   networkPolicy:
  *     enabled: true
  *     ingress:
- *       - from:
- *           - namespaceSelector:
- *               matchLabels:
- *                 app: frontend
- *         ports: [8080]
- *   rbac:
- *     serviceAccount: user-service-sa
+ *       - ports: [8080]
+ *     egress:
+ *       - ports: [443, 5432]
+ *   accessControl:
+ *     identity: my-service-identity
  *     roles:
  *       - secrets-reader
- *       - configmap-reader
+ *       - database-reader
  *   secrets:
  *     provider: vault
  *     path: secret/data/user-service
@@ -303,8 +303,8 @@ export interface SecurityConfig {
   /** Network policy configuration */
   networkPolicy?: NetworkPolicyConfig
 
-  /** RBAC configuration */
-  rbac?: RBACConfig
+  /** Access control configuration */
+  accessControl?: AccessControlConfig
 
   /** Secrets management configuration */
   secrets?: SecretsConfig
@@ -336,13 +336,17 @@ export interface NetworkPolicyRule {
 }
 
 /**
- * RBAC configuration
+ * Access control configuration.
+ *
+ * Defines identity and role-based access for the service.
+ * Services interpret this for their target infrastructure
+ * (e.g., K8s ServiceAccount, AWS IAM Role, GCP Service Account).
  */
-export interface RBACConfig {
-  /** Service account name */
-  serviceAccount?: string
+export interface AccessControlConfig {
+  /** Service identity (e.g., service account name, IAM role) */
+  identity?: string
 
-  /** Required roles */
+  /** Required roles or permissions */
   roles?: string[]
 }
 
@@ -535,10 +539,11 @@ export type BackendConfig =
 
 /**
  * Stack-specific configuration with optional backend override.
+ *
+ * Stack config is passed to services via `ctx.globalConfig`. Services
+ * can access any values defined here (e.g., `ctx.globalConfig.namespace`).
  */
 export interface StackConfig {
-  /** Kubernetes namespace for this stack */
-  namespace?: string
   /** Backend configuration (overrides project-level default) */
   backend?: BackendConfig
   /** Additional stack-specific settings */

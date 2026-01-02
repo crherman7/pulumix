@@ -25,7 +25,7 @@ import type { ServiceMetadata, ObservabilityConfig, SecurityConfig, BuildConfig 
  * ```typescript
  * export default async (ctx: ServiceContext) => {
  *   const config = ctx.config
- *   const namespace = ctx.namespace
+ *   const namespace = ctx.globalConfig.namespace as string
  *
  *   // Create resources...
  *   return { outputs: { endpoint: '...' } }
@@ -73,10 +73,8 @@ export interface ServiceContext<TDeps = Record<string, Record<string, unknown>>>
   readonly security?: SecurityConfig
   /** Stack-scoped config from deploy.yaml */
   readonly config: Record<string, unknown>
-  /** Global config from root deploy.yaml */
+  /** Global config from root deploy.yaml (e.g., globalConfig.namespace) */
   readonly globalConfig: Record<string, unknown>
-  /** Namespace for resources */
-  readonly namespace: string
   /** Outputs from dependency services */
   readonly dependencies: TDeps
   /** Pre-built image reference (if applicable) */
@@ -145,17 +143,17 @@ export interface ServiceResult<TOutputs = Record<string, unknown>> {
  * @example
  * Basic service (pulumix.ts)
  * ```typescript
- * import * as k8s from '@pulumi/kubernetes'
+ * import * as pulumi from '@pulumi/pulumi'
  * import { ServiceContext, ServiceResult } from '@pulumix/core'
  *
  * export default async (ctx: ServiceContext): Promise<ServiceResult> => {
- *   const deployment = new k8s.apps.v1.Deployment(ctx.serviceName, {
- *     metadata: { namespace: ctx.namespace },
- *     spec: { ... }
- *   })
+ *   // Access stack config values from globalConfig
+ *   const namespace = ctx.globalConfig.namespace as string
+ *
+ *   // Create resources using any Pulumi provider...
  *
  *   return {
- *     outputs: { deploymentName: deployment.metadata.name }
+ *     outputs: { serviceName: ctx.serviceName }
  *   }
  * }
  * ```
