@@ -7,14 +7,14 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@pulumix/cli">
-    <img src="https://img.shields.io/npm/v/@pulumix/cli?logo=npm" alt="npm version" />
+  <a href="https://www.npmjs.com/package/@pulumix/cli" style="text-decoration: none;">
+    <img src="https://img.shields.io/npm/v/@pulumix/cli?logo=npm&label=@pulumix/cli" alt="@pulumix/cli npm version" />
   </a>
-  <a href="https://www.npmjs.com/package/@pulumix/core">
-    <img src="https://img.shields.io/npm/v/@pulumix/core?logo=npm" alt="core npm version" />
+  <a href="https://www.npmjs.com/package/@pulumix/core" style="text-decoration: none;">
+    <img src="https://img.shields.io/npm/v/@pulumix/core?logo=npm&label=@pulumix/core" alt="@pulumix/core npm version" />
   </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/crherman7/pulumix?branch=develop" alt="license" />
+  <a href="LICENSE" style="text-decoration: none;">
+    <img src="https://img.shields.io/github/license/crherman7/pulumix?branch=develop&label=license" alt="license" />
   </a>
 </p>
 
