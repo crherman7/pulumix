@@ -9,7 +9,6 @@
 
 import * as path from 'path'
 import * as fs from 'fs'
-import { spawnSync } from 'child_process'
 import glob from 'fast-glob'
 import { EitherAsync } from 'purify-ts/EitherAsync'
 import { Either, Left, Right } from 'purify-ts/Either'
@@ -17,7 +16,6 @@ import { Maybe, Just, Nothing } from 'purify-ts/Maybe'
 import { createJiti } from 'jiti'
 import * as yaml from 'yaml'
 import {
-  createDeploymentError,
   createDiscoveryError,
   createConfigError,
   DeployError
@@ -34,16 +32,19 @@ import type {
   ServiceMetadata,
   ObservabilityConfig,
   SecurityConfig,
+  BuildConfig,
   BackendConfig,
   ProjectConfig
 } from '../types/manifest'
+import { executeHooksForStage, getHooksForStack } from './hooks'
 import { LocalWorkspace } from '@pulumi/pulumi/automation'
 import {
-  buildImage,
-  pushImage,
   hashBuildContext,
   imageExistsInRegistry,
-  getImageDigestFromRegistry
+  getImageDigestFromRegistry,
+  generateBakeConfig,
+  runBake,
+  BakeServiceConfig
 } from '../docker'
 
 // Create jiti instance for loading TypeScript files at runtime
@@ -75,18 +76,6 @@ export interface OrchestratorResult {
   readonly servicesDeployed: number
   readonly duration: number
   readonly outputs: Record<string, Record<string, unknown>>
-}
-
-/**
- * K3d configuration from pulumix.yaml
- */
-interface K3dConfig {
-  readonly enabled?: boolean
-  readonly clusterName?: string
-  readonly registryPort?: number
-  readonly port?: number
-  readonly hostRegistry?: string
-  readonly clusterRegistry?: string
 }
 
 /**
@@ -187,12 +176,6 @@ const resolveWorkDir = (
 // ============================================================================
 
 /**
- * Validate that a value is a safe shell argument (no injection)
- */
-const isValidShellArg = (value: string): boolean =>
-  /^[a-zA-Z0-9_\-.:]+$/.test(value)
-
-/**
  * Parse YAML file safely with Either
  */
 const parseYamlFile = (filePath: string): Either<DeployError, Record<string, unknown>> => {
@@ -252,6 +235,25 @@ const parseServiceMetadata = (rawConfig: Record<string, unknown>, serviceName: s
 }
 
 /**
+ * Extract service name from a package dependency name.
+ * Strips scope and checks if any known service name is contained in the package name.
+ * e.g., "@noctemhealth/infrastructure-mongodb" -> "mongodb"
+ */
+const matchServiceName = (depName: string, allServiceNames: Set<string>): string | null => {
+  // Strip scope: "@noctemhealth/infrastructure-mongodb" -> "infrastructure-mongodb"
+  const packagePart = depName.includes('/') ? depName.split('/').pop()! : depName
+
+  // Check if any service name is contained in the package name
+  for (const serviceName of allServiceNames) {
+    if (packagePart.includes(serviceName)) {
+      return serviceName
+    }
+  }
+
+  return null
+}
+
+/**
  * Extract service dependencies from package.json
  * Looks for local workspace dependencies (services in the same project)
  */
@@ -268,16 +270,14 @@ const extractDependenciesFromPackageJson = (
     const pkg = JSON.parse(content)
     const deps = { ...pkg.dependencies, ...pkg.devDependencies }
 
-    // Filter for local service dependencies
-    // Match service names from the workspace
-    return Object.keys(deps).filter(dep => {
-      // Extract service name from package name (e.g., "@myapp/provider" -> "provider")
-      const serviceName = dep.includes('/') ? dep.split('/').pop() : dep
-      return serviceName && allServiceNames.has(serviceName)
-    }).map(dep => {
-      const serviceName = dep.includes('/') ? dep.split('/').pop() : dep
-      return serviceName!
-    })
+    const matched: string[] = []
+    for (const dep of Object.keys(deps)) {
+      const serviceName = matchServiceName(dep, allServiceNames)
+      if (serviceName && !matched.includes(serviceName)) {
+        matched.push(serviceName)
+      }
+    }
+    return matched
   } catch {
     return []
   }
@@ -348,6 +348,7 @@ export const discoverServices = async (rootPath: string): Promise<Either<DeployE
 
       const rawConfig = configResult.unsafeCoerce()
       const metadata = parseServiceMetadata(rawConfig, path.basename(servicePath))
+      const build = rawConfig.build as BuildConfig | undefined
       const observability = rawConfig.observability as ObservabilityConfig | undefined
       const security = rawConfig.security as SecurityConfig | undefined
 
@@ -363,12 +364,18 @@ export const discoverServices = async (rootPath: string): Promise<Either<DeployE
         hasDockerfile: fs.existsSync(dockerPath),
         rawConfig,
         metadata,
+        build,
         observability,
         security
       })
     }
 
-    return Right(services)
+    // Deduplicate services by name (first occurrence wins)
+    const uniqueServices = Array.from(
+      new Map(services.map(s => [s.name, s])).values()
+    )
+
+    return Right(uniqueServices)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return Left(
@@ -486,6 +493,7 @@ export const discoverPublishedServices = async (
 
       const rawConfig = configResult.unsafeCoerce()
       const metadata = parseServiceMetadata(rawConfig, path.basename(servicePath))
+      const build = rawConfig.build as BuildConfig | undefined
       const observability = rawConfig.observability as ObservabilityConfig | undefined
       const security = rawConfig.security as SecurityConfig | undefined
 
@@ -500,12 +508,18 @@ export const discoverPublishedServices = async (
         hasDockerfile: fs.existsSync(dockerPath),
         rawConfig,
         metadata,
+        build,
         observability,
         security
       })
     }
 
-    return Right(services)
+    // Deduplicate services by name (first occurrence wins)
+    const uniqueServices = Array.from(
+      new Map(services.map(s => [s.name, s])).values()
+    )
+
+    return Right(uniqueServices)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return Left(
@@ -581,266 +595,104 @@ const filterServices = (
     : services
 
 // ============================================================================
-// Effects - Shell Commands (with validation)
-// ============================================================================
-
-/**
- * Run command with streaming progress updates (async)
- */
-const runCommandWithProgress = (
-  command: string,
-  args: readonly string[],
-  onProgress: (line: string) => void,
-  options?: { cwd?: string }
-): Promise<Either<DeployError, string>> => {
-  return new Promise((resolve) => {
-    const { spawn } = require('child_process')
-    const proc = spawn(command, args as string[], {
-      cwd: options?.cwd,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-
-    let stdout = ''
-    let stderr = ''
-
-    // Stream stdout line by line
-    proc.stdout.on('data', (data: Buffer) => {
-      const text = data.toString()
-      stdout += text
-
-      const lines = text.split('\n')
-      for (const line of lines) {
-        if (line.trim()) {
-          onProgress(line.trim())
-        }
-      }
-    })
-
-    // Capture stderr
-    proc.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
-
-    proc.on('close', (code: number) => {
-      if (code !== 0) {
-        resolve(Left(
-          createDeploymentError(
-            'PulumiFailed',
-            `Command failed: ${command} ${args.join(' ')}\n${stderr || stdout}`,
-            undefined,
-            { exitCode: code }
-          )
-        ))
-      } else {
-        resolve(Right(stdout))
-      }
-    })
-
-    proc.on('error', (err: Error) => {
-      resolve(Left(
-        createDeploymentError(
-          'PulumiFailed',
-          `Command error: ${command} ${args.join(' ')}\n${err.message}`,
-          undefined,
-          { error: err }
-        )
-      ))
-    })
-  })
-}
-
-/**
- * Check if k3d cluster exists
- */
-const clusterExists = (clusterName: string): boolean => {
-  if (!isValidShellArg(clusterName)) {
-    return false
-  }
-
-  const result = spawnSync('k3d', ['cluster', 'list', '-o', 'json'], {
-    encoding: 'utf-8',
-    stdio: 'pipe'
-  })
-
-  if (result.status !== 0) {
-    return false
-  }
-
-  try {
-    const clusters = JSON.parse(result.stdout)
-    return clusters.some((c: { name: string }) => c.name === clusterName)
-  } catch {
-    return false
-  }
-}
-
-/**
- * Create k3d cluster with registry
- */
-const createK3dCluster = async (
-  clusterName: string,
-  registryPort: number,
-  port: number,
-  eventEmitter: OrchestratorEventEmitter
-): Promise<Either<DeployError, void>> => {
-  // Validate inputs to prevent command injection
-  if (!isValidShellArg(clusterName)) {
-    return Left(
-      createDeploymentError(
-        'ValidationFailed',
-        `Invalid cluster name: ${clusterName}. Must contain only alphanumeric characters, hyphens, underscores, and periods.`
-      )
-    )
-  }
-
-  if (registryPort < 1 || registryPort > 65535) {
-    return Left(
-      createDeploymentError(
-        'ValidationFailed',
-        `Invalid registry port: ${registryPort}`
-      )
-    )
-  }
-
-  const args = [
-    'cluster', 'create', clusterName,
-    '--registry-create', `${clusterName}-registry:0.0.0.0:${registryPort}`,
-    '--port', `${port}:80@loadbalancer`,
-    '--agents', '2',
-    '--wait'
-  ]
-
-  // Create cluster with streaming progress
-  const result = await runCommandWithProgress(
-    'k3d',
-    args,
-    (line) => {
-      // Emit k3d progress messages
-      if (line.includes('Creating') || line.includes('Starting') || line.includes('Waiting') || line.includes('Successfully')) {
-        eventEmitter.emitTaskUpdate(clusterName, line)
-      }
-    },
-    { cwd: undefined }
-  )
-
-  return result.map(() => undefined)
-}
-
-// ============================================================================
 // Effects - Docker Build
 // ============================================================================
 
 /**
- * Build result with skip information
+ * Resolve build context path based on service build configuration
+ *
+ * @param service - The discovered service
+ * @param rootPath - The project root path
+ * @returns Resolved context path and dockerfile path
  */
-interface BuildImageResult {
-  /** Image reference (registry/name@digest or registry/name:tag) */
-  imageRef: string
-  /** Whether the build was skipped (image already existed) */
-  skipped: boolean
-  /** Content hash used for caching */
-  contentHash: string
+const resolveBuildContext = (
+  service: DiscoveredService,
+  rootPath: string
+): { contextPath: string; dockerfile: string } => {
+  const buildConfig = service.build
+  const context = buildConfig?.context ?? '.'
+
+  let contextPath: string
+  let dockerfile: string
+
+  if (context === 'root') {
+    // Use project root as context
+    contextPath = rootPath
+    // Default dockerfile path is relative from root to service's Dockerfile
+    dockerfile = buildConfig?.dockerfile ?? path.relative(rootPath, path.join(service.path, 'Dockerfile'))
+  } else if (context === '.') {
+    // Use service directory (default)
+    contextPath = service.path
+    dockerfile = buildConfig?.dockerfile ?? 'Dockerfile'
+  } else {
+    // Relative path from service directory
+    contextPath = path.resolve(service.path, context)
+    dockerfile = buildConfig?.dockerfile ?? 'Dockerfile'
+  }
+
+  return { contextPath, dockerfile }
 }
 
 /**
- * Build and push Docker image for a service with content-based caching
- *
- * Uses content hashing to skip builds when source files haven't changed.
- * The content hash is used as the image tag for cache lookup.
+ * Prepared build info for a service
  */
-const buildAndPushImage = async (
+interface PreparedBuild {
+  service: DiscoveredService
+  contextPath: string
+  dockerfile: string
+  contentHash: string
+  imageTag: string
+  cached: boolean
+  imageRef?: string
+}
+
+/**
+ * Prepare build info for a service and check cache
+ *
+ * Resolves build context, computes content hash, and checks if image
+ * already exists in registry.
+ */
+const prepareBuild = async (
   service: DiscoveredService,
   registry: string,
-  eventEmitter: OrchestratorEventEmitter
-): Promise<Either<DeployError, BuildImageResult | undefined>> => {
-  if (!service.hasDockerfile) {
-    return Right(undefined)
-  }
+  rootPath: string
+): Promise<PreparedBuild> => {
+  // Resolve build context and dockerfile paths
+  const { contextPath, dockerfile } = resolveBuildContext(service, rootPath)
 
-  // Compute content hash of build context
-  const contentHash = await hashBuildContext(service.path)
+  // Compute content hash based on Dockerfile COPY/ADD paths
+  const contentHash = await hashBuildContext(contextPath, dockerfile)
   const imageTag = `${registry}/${service.name}:${contentHash}`
 
   // Check if image with this hash already exists in registry
   const exists = await imageExistsInRegistry(registry, service.name, contentHash)
 
   if (exists) {
-    // Image exists - get its digest and skip build
+    // Image exists - get its digest
     const digest = await getImageDigestFromRegistry(registry, service.name, contentHash)
+    const imageRef = digest
+      ? `${registry}/${service.name}@${digest}`
+      : imageTag
 
-    if (digest) {
-      eventEmitter.emitTaskUpdate(service.name, `unchanged (${contentHash})`)
-      return Right({
-        imageRef: `${registry}/${service.name}@${digest}`,
-        skipped: true,
-        contentHash
-      })
+    return {
+      service,
+      contextPath,
+      dockerfile,
+      contentHash,
+      imageTag,
+      cached: true,
+      imageRef
     }
-
-    // Fallback to tag if digest not available
-    eventEmitter.emitTaskUpdate(service.name, `unchanged (${contentHash})`)
-    return Right({
-      imageRef: imageTag,
-      skipped: true,
-      contentHash
-    })
   }
 
-  // Image doesn't exist - build and push
-  eventEmitter.emitTaskUpdate(service.name, `building (${contentHash})`)
-
-  // Build the image using Docker SDK
-  const buildResult = await buildImage({
-    contextPath: service.path,
-    tag: imageTag,
-    onProgress: (progress) => {
-      if (progress.current && progress.total) {
-        eventEmitter.emitTaskUpdate(
-          service.name,
-          progress.message,
-          (progress.current / progress.total) * 100
-        )
-      } else {
-        eventEmitter.emitTaskUpdate(service.name, progress.message)
-      }
-    }
-  })
-
-  if (buildResult.isLeft()) {
-    return buildResult
+  return {
+    service,
+    contextPath,
+    dockerfile,
+    contentHash,
+    imageTag,
+    cached: false
   }
-
-  // Push to registry using Docker SDK
-  const pushResult = await pushImage({
-    tag: imageTag,
-    onProgress: (progress) => {
-      const msg = progress.id
-        ? `${progress.status} ${progress.id}${progress.progress ? ` (${progress.progress}%)` : ''}`
-        : progress.status
-      eventEmitter.emitTaskUpdate(service.name, msg)
-    }
-  })
-
-  if (pushResult.isLeft()) {
-    return pushResult
-  }
-
-  // Use digest-based reference for guaranteed image matching
-  const push = pushResult.extract() as { tag: string; digest?: string }
-  if (push.digest) {
-    return Right({
-      imageRef: `${registry}/${service.name}@${push.digest}`,
-      skipped: false,
-      contentHash
-    })
-  }
-
-  // Fallback to tag if no digest available
-  return Right({
-    imageRef: imageTag,
-    skipped: false,
-    contentHash
-  })
 }
 
 // ============================================================================
@@ -990,89 +842,173 @@ export class Orchestrator {
       }
       this.eventEmitter.emitPhaseComplete('dependency-analysis')
 
-      // Get registry config from provider service
-      const providerService = sorted.find(s => s.name === 'provider')
-      const providerConfig = providerService
-        ? resolveStackConfig(providerService, config.stackName).stackConfig
-        : {}
-      const k3dConfig = getConfigValue<K3dConfig>(providerConfig, 'k3d').orDefault({})
+      // Get registry config from global config (user provides via hooks env vars or stack config)
+      const hostRegistry = getConfigValue<string>(globalConfig, 'hostRegistry').orDefault('localhost:5001')
+      const clusterRegistry = getConfigValue<string>(globalConfig, 'clusterRegistry').orDefault(hostRegistry)
 
-      // Host registry for building/pushing (Docker on host)
-      const hostRegistry =
-        getConfigValue<string>(globalConfig, 'hostRegistry').orDefault('') ||
-        k3dConfig.hostRegistry ||
-        (k3dConfig.registryPort ? `localhost:${k3dConfig.registryPort}` : 'localhost:5001')
+      // Get hooks for this stack
+      const hooks = getHooksForStack(rootConfig.hooks, config.stackName)
 
-      // Cluster registry for k8s to pull from (internal network)
-      const clusterRegistry =
-        getConfigValue<string>(globalConfig, 'clusterRegistry').orDefault('') ||
-        k3dConfig.clusterRegistry ||
-        hostRegistry
-
-      // Phase 4: Bootstrap - ensure cluster/registry exist before building
+      // Phase 4: Bootstrap - run pre-build hooks
       const servicesToBuild = sorted.filter(s => s.hasDockerfile)
+      const preBuildHooks = hooks.filter(h => h.stage === 'pre-build')
 
-      if (servicesToBuild.length > 0 && k3dConfig.enabled) {
+      if (preBuildHooks.length > 0) {
         this.eventEmitter.emitPhaseStart('bootstrap')
 
-        const clusterName = k3dConfig.clusterName ?? 'pulumix-dev'
-        const port = k3dConfig.port ?? 80
-        const registryPort = k3dConfig.registryPort ?? 5001
+        const hookResult = await executeHooksForStage('pre-build', hooks, config.rootPath, this.eventEmitter)
 
-        if (clusterExists(clusterName)) {
-          // Cluster already exists - emit as skipped/unchanged
-          this.eventEmitter.emitTaskStart(clusterName)
-          this.eventEmitter.emitTaskComplete(clusterName, true, true)  // skipped=true
-        } else {
-          // Emit task start
-          this.eventEmitter.emitTaskStart(clusterName)
-
-          const createResult = await createK3dCluster(clusterName, registryPort, port, this.eventEmitter)
-
-          // Emit task complete
-          const success = createResult.isRight()
-          this.eventEmitter.emitTaskComplete(clusterName, success)
-
-          if (createResult.isLeft()) {
-            throw throwE(createResult.extract() as DeployError)
-          }
+        if (hookResult.isLeft()) {
+          this.eventEmitter.emitPhaseComplete('bootstrap', false)
+          throw throwE(hookResult.extract() as DeployError)
         }
 
         this.eventEmitter.emitPhaseComplete('bootstrap')
       }
 
-      // Phase 5: Build Docker images
+      // Phase 5: Build Docker images using docker buildx bake
       const builtImages: Record<string, string> = {}
 
       if (servicesToBuild.length > 0) {
         this.eventEmitter.emitPhaseStart('image-build')
 
-        for (const service of servicesToBuild) {
-          // Emit task start for spinner
-          this.eventEmitter.emitTaskStart(service.name)
+        // Prepare all builds and check cache in parallel
+        const preparedBuilds = await Promise.all(
+          servicesToBuild.map(service => prepareBuild(service, hostRegistry, config.rootPath))
+        )
 
-          const buildResult = await buildAndPushImage(service, hostRegistry, this.eventEmitter)
+        // Separate cached and uncached builds
+        const cachedBuilds = preparedBuilds.filter(b => b.cached)
+        const uncachedBuilds = preparedBuilds.filter(b => !b.cached)
 
-          if (buildResult.isLeft()) {
-            // Log warning but continue - some services might not need images
-            const error = buildResult.extract() as DeployError
-            this.eventEmitter.emitTaskComplete(service.name, false)
-            this.eventEmitter.emitLog('warn', error.message, undefined, 'Build')
-          } else {
-            const result = buildResult.unsafeCoerce()
-            if (result) {
-              // Replace host registry with cluster registry, preserving digest if present
-              // e.g., localhost:5001/service@sha256:abc -> k3d-registry:5001/service@sha256:abc
-              const imageWithoutRegistry = result.imageRef.replace(`${hostRegistry}/`, '')
-              builtImages[service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
+        // Handle cached builds - emit immediate completion
+        for (const build of cachedBuilds) {
+          this.eventEmitter.emitTaskStart(build.service.name)
+          this.eventEmitter.emitTaskUpdate(build.service.name, `unchanged (${build.contentHash})`)
 
-              // Emit task complete with content hash for display
-              this.eventEmitter.emitTaskComplete(service.name, true, result.skipped, result.contentHash)
+          // Replace host registry with cluster registry
+          const imageWithoutRegistry = (build.imageRef || build.imageTag).replace(`${hostRegistry}/`, '')
+          builtImages[build.service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
+
+          this.eventEmitter.emitTaskComplete(build.service.name, true, true, build.contentHash)
+        }
+
+        // Handle uncached builds using docker buildx bake
+        if (uncachedBuilds.length > 0) {
+          // Emit task start for all uncached builds - show "building" status
+          for (const build of uncachedBuilds) {
+            this.eventEmitter.emitTaskStart(build.service.name)
+            this.eventEmitter.emitTaskUpdate(build.service.name, 'building')
+          }
+
+          // Generate bake config
+          const bakeServices: BakeServiceConfig[] = uncachedBuilds.map(build => ({
+            name: build.service.name,
+            contextPath: build.contextPath,
+            dockerfile: build.dockerfile,
+            tag: build.imageTag,
+            contentHash: build.contentHash
+          }))
+
+          const bakeConfig = generateBakeConfig(bakeServices)
+          const bakeFilePath = path.join(config.rootPath, 'dist', 'docker-bake.json')
+
+          // Ensure dist directory exists
+          if (!fs.existsSync(path.dirname(bakeFilePath))) {
+            fs.mkdirSync(path.dirname(bakeFilePath), { recursive: true })
+          }
+
+          // Write bake config file
+          fs.writeFileSync(bakeFilePath, JSON.stringify(bakeConfig, null, 2))
+
+          // Track last step shown per service to avoid duplicate updates
+          const lastStepShown = new Map<string, string>()
+          // Track targets that have completed to avoid duplicate completion events
+          const completedTargets = new Set<string>()
+
+          // Run bake with rawjson progress - emit step updates per service
+          const bakeResult = await runBake(
+            bakeFilePath,
+            bakeServices,
+            (progress) => {
+              // Skip internal/global events
+              if (!progress.target || progress.target.startsWith('_')) return
+
+              // Check if this is a final export step completing
+              // Export steps are the last phase of a build (exporting to image, exporting layers, etc.)
+              const isExportStep = progress.message.includes('exporting')
+
+              // If an export step completed, the target build is done
+              if (progress.done && isExportStep) {
+                completedTargets.add(progress.target)
+                this.eventEmitter.emitTaskComplete(progress.target, !progress.error)
+                return
+              }
+
+              // Format step progress message
+              let message = progress.message
+              if (progress.step) {
+                message = `[${progress.step.current}/${progress.step.total}] ${progress.message}`
+              }
+
+              // Skip if this is the same step we already showed
+              const lastShown = lastStepShown.get(progress.target)
+              if (lastShown === message) return
+              lastStepShown.set(progress.target, message)
+
+              // Emit task update with step progress
+              this.eventEmitter.emitTaskUpdate(progress.target, message)
+            }
+          )
+
+          if (bakeResult.isLeft()) {
+            // Build failed - mark uncached builds that haven't completed as failed
+            const error = bakeResult.extract() as DeployError
+            for (const build of uncachedBuilds) {
+              if (!completedTargets.has(build.service.name)) {
+                this.eventEmitter.emitTaskComplete(build.service.name, false)
+              }
+            }
+            this.eventEmitter.emitLog('error', error.message, undefined, 'Build')
+            this.eventEmitter.emitPhaseComplete('image-build', false)
+            throw error
+          }
+
+          // Build succeeded - update builtImages and emit completions for any not already completed
+          const imageRefs = bakeResult.unsafeCoerce()
+          for (const build of uncachedBuilds) {
+            const imageRef = imageRefs.get(build.service.name) || build.imageTag
+
+            // Replace host registry with cluster registry
+            const imageWithoutRegistry = imageRef.replace(`${hostRegistry}/`, '')
+            builtImages[build.service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
+
+            // Only emit completion if not already completed via progress callback
+            if (!completedTargets.has(build.service.name)) {
+              this.eventEmitter.emitTaskComplete(build.service.name, true, false, build.contentHash)
             }
           }
         }
 
         this.eventEmitter.emitPhaseComplete('image-build')
+      }
+
+      // Run post-build hooks
+      const postBuildHooks = hooks.filter(h => h.stage === 'post-build')
+      if (postBuildHooks.length > 0) {
+        const hookResult = await executeHooksForStage('post-build', hooks, config.rootPath, this.eventEmitter)
+        if (hookResult.isLeft()) {
+          throw throwE(hookResult.extract() as DeployError)
+        }
+      }
+
+      // Run pre-deploy hooks
+      const preDeployHooks = hooks.filter(h => h.stage === 'pre-deploy')
+      if (preDeployHooks.length > 0) {
+        const hookResult = await executeHooksForStage('pre-deploy', hooks, config.rootPath, this.eventEmitter)
+        if (hookResult.isLeft()) {
+          throw throwE(hookResult.extract() as DeployError)
+        }
       }
 
       // Phase 6: Run Pulumi deployment
@@ -1082,7 +1018,7 @@ export class Orchestrator {
       const outputs: Record<string, Record<string, unknown>> = {}
 
       // Create Pulumi program that runs all services
-      const program = async (): Promise<void> => {
+      const program = async (): Promise<Record<string, unknown>> => {
         for (const service of sorted) {
           const resolved = resolveStackConfig(service, config.stackName)
 
@@ -1112,6 +1048,9 @@ export class Orchestrator {
             outputs[service.name] = result.outputs
           }
         }
+
+        // Return outputs so they're registered as Pulumi stack outputs
+        return outputs
       }
 
       // Resolve backend configuration
@@ -1143,11 +1082,25 @@ export class Orchestrator {
 
       // Simple approach: just use onOutput with the provided logger
       // The logger (from CLI) handles all parsing and display
-      await stack.up({
-        onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
-      })
+      try {
+        await stack.up({
+          onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
+        })
+        this.eventEmitter.emitPhaseComplete('deployment')
+      } catch (err) {
+        this.eventEmitter.emitPhaseComplete('deployment', false)
+        const message = err instanceof Error ? err.message : String(err)
+        throw new Error(`Pulumi update failed: ${message}`)
+      }
 
-      this.eventEmitter.emitPhaseComplete('deployment')
+      // Run post-deploy hooks
+      const postDeployHooks = hooks.filter(h => h.stage === 'post-deploy')
+      if (postDeployHooks.length > 0) {
+        const hookResult = await executeHooksForStage('post-deploy', hooks, config.rootPath, this.eventEmitter)
+        if (hookResult.isLeft()) {
+          throw throwE(hookResult.extract() as DeployError)
+        }
+      }
 
       // Retrieve Pulumi stack outputs (resource outputs)
       const stackOutputs = await stack.outputs()

@@ -34,7 +34,7 @@ const SECTION_NAMES: Record<PhaseName, string> = {
   'Discovery': 'Discovery',
   'Configuration': 'Configuration',
   'DependencyGraph': 'Dependencies',
-  'Bootstrap': 'Cluster',
+  'Bootstrap': 'Hooks',
   'Secrets': 'Secrets',
   'Build': 'Build',
   'Deploy': 'Deploy',
@@ -81,18 +81,29 @@ interface BuildTask {
   spinnerFrame: number
 }
 
+interface CompletedTask {
+  label: string
+  success: boolean
+  skipped: boolean
+  contentHash?: string
+  duration: number
+}
+
 const createBuildTaskSpinner = () => {
   const tasks = new Map<string, BuildTask>()
+  const completedTasks: CompletedTask[] = []
   let interval: NodeJS.Timeout | null = null
+  let stopped = false
 
   const updater = logUpdate({
-    height: process.stdout.rows,
-    width: process.stdout.columns,
+    height: process.stdout.rows ?? 24,
+    width: process.stdout.columns ?? 80,
   })
 
-  process.stdout.on('resize', () => {
-    updater.resize({ width: process.stdout.columns, height: process.stdout.rows })
-  })
+  const resizeHandler = (): void => {
+    updater.resize({ width: process.stdout.columns ?? 80, height: process.stdout.rows ?? 24 })
+  }
+  process.stdout.on('resize', resizeHandler)
 
   const getSpinnerFrame = (frame: number): string =>
     cliSpinners.dots.frames[frame % cliSpinners.dots.frames.length] ?? ''
@@ -107,8 +118,29 @@ const createBuildTaskSpinner = () => {
     return str.slice(0, maxLen - 3) + '...'
   }
 
+  const formatCompletedLine = (task: CompletedTask): string => {
+    const icon = task.success ? chalk.green('+') : chalk.red('-')
+    const statusText = task.skipped
+      ? chalk.bold.dim('unchanged')
+      : task.success
+        ? chalk.bold.green('created')
+        : chalk.bold.red('failed')
+    const hashText = task.contentHash ? ` ${chalk.dim(`(${task.contentHash})`)}` : ''
+    return `  ${icon} ${task.label}${hashText} ${statusText} ${chalk.dim(`(${(task.duration / 1000).toFixed(1)}s)`)}`
+  }
+
   const render = (): void => {
+    // Guard against race condition after stop
+    if (stopped) return
+
     const lines: string[] = []
+
+    // Add completed tasks first (static lines)
+    for (const completed of completedTasks) {
+      lines.push(formatCompletedLine(completed))
+    }
+
+    // Add in-progress tasks with spinners
     for (const task of tasks.values()) {
       const frame = getSpinnerFrame(task.spinnerFrame)
       const elapsed = ((Date.now() - task.startTime) / 1000).toFixed(1)
@@ -117,12 +149,13 @@ const createBuildTaskSpinner = () => {
       task.spinnerFrame++
     }
 
-    if (lines.length > 0) {
-      if (process.stdout.isTTY) {
-        process.stdout.write('\u001B[?25l') // hide cursor
-      }
-      process.stdout.write(updater.update(lines.join('\n')))
+    // Don't render if nothing to show
+    if (lines.length === 0) return
+
+    if (process.stdout.isTTY) {
+      process.stdout.write('\u001B[?25l') // hide cursor
     }
+    process.stdout.write(updater.update(lines.join('\n')))
   }
 
   const clear = (): void => {
@@ -140,6 +173,7 @@ const createBuildTaskSpinner = () => {
       tasks.set(id, { id, label, status: '', phase, startTime: Date.now(), spinnerFrame: 0 })
 
       if (!interval) {
+        stopped = false
         interval = setInterval(render, cliSpinners.dots.interval)
       }
     },
@@ -158,27 +192,38 @@ const createBuildTaskSpinner = () => {
       const duration = Date.now() - task.startTime
       tasks.delete(id)
 
-      // If no more tasks, stop interval and clear
+      // Add to completed tasks for rendering
+      completedTasks.push({
+        label: task.label,
+        success,
+        skipped: skipped ?? false,
+        contentHash,
+        duration
+      })
+
+      // If no more active tasks, stop interval and print final output
       if (tasks.size === 0 && interval) {
+        stopped = true
         clearInterval(interval)
         interval = null
         clear()
+        // Print all completed tasks
+        for (const completed of completedTasks) {
+          process.stdout.write(formatCompletedLine(completed) + '\n')
+        }
+        completedTasks.length = 0
       }
-
-      // Print completion line with label and hash
-      const icon = success ? chalk.green('+') : chalk.red('-')
-      const statusText = skipped ? chalk.bold.dim('unchanged') : chalk.bold.green('created')
-      const hashText = contentHash ? ` ${chalk.dim(`(${contentHash})`)}` : ''
-      console.log(`  ${icon} ${task.label}${hashText} ${statusText} ${chalk.dim(`(${(duration / 1000).toFixed(1)}s)`)}`)
 
       return { duration }
     },
 
     cleanup: (): void => {
+      stopped = true
       if (interval) {
         clearInterval(interval)
         interval = null
       }
+      process.stdout.off('resize', resizeHandler)
       clear()
       showCursor()
     }

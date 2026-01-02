@@ -158,7 +158,7 @@ export class OrchestratorEventEmitter {
   /**
    * Emit phase complete event
    */
-  emitPhaseComplete(phase: DeploymentPhase): void {
+  emitPhaseComplete(phase: DeploymentPhase, success: boolean = true): void {
     const eventPhase = mapPhaseToEventPhase(phase)
     const phaseNumber = getPhaseNumber(phase)
 
@@ -166,7 +166,7 @@ export class OrchestratorEventEmitter {
       type: 'PhaseComplete',
       phaseNumber,
       phase: eventPhase,
-      status: 'success',
+      status: success ? 'success' : 'error',
       timestamp: Date.now()
     })
   }

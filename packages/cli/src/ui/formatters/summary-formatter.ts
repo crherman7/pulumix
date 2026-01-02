@@ -58,7 +58,7 @@ const PHASE_DISPLAY_NAMES: Record<string, string> = {
   'Configuration': 'Configuration',
   'Discovery': 'Discovery',
   'DependencyGraph': 'Dependencies',
-  'Bootstrap': 'Cluster',
+  'Bootstrap': 'Hooks',
   'Build': 'Build',
   'Deploy': 'Deploy',
   'Secrets': 'Secrets',

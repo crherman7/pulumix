@@ -6,7 +6,7 @@
  */
 
 import * as pulumi from '@pulumi/pulumi'
-import type { ServiceMetadata, ObservabilityConfig, SecurityConfig } from './manifest'
+import type { ServiceMetadata, ObservabilityConfig, SecurityConfig, BuildConfig } from './manifest'
 
 /**
  * Configuration passed to a service's deploy function.
@@ -204,6 +204,8 @@ export interface DiscoveredService {
   readonly rawConfig: Record<string, unknown>
   /** Parsed service metadata */
   readonly metadata: ServiceMetadata
+  /** Docker build configuration */
+  readonly build?: BuildConfig
   /** Observability configuration */
   readonly observability?: ObservabilityConfig
   /** Security configuration */

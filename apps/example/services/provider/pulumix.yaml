@@ -1,5 +1,5 @@
 # Provider Service
-# Sets up the Kubernetes cluster/provider
+# Provides cluster information as outputs
 
 metadata:
   name: provider
@@ -11,18 +11,10 @@ metadata:
 
 stacks:
   local:
-    k3d:
-      enabled: true
-      clusterName: hello-world
-      port: 80
-      registryPort: 5001
-      # Host registry for building/pushing
-      hostRegistry: localhost:5001
-      # Cluster registry for k8s to pull from (internal k3d network)
-      clusterRegistry: hello-world-registry:5000
+    clusterName: hello-world
+    registry: localhost:5001
+    kubeconfig: k3d-hello-world
 
   production:
-    # Production uses existing cluster
-    # Could add GKE/LKE config here
-    k3d:
-      enabled: false
+    clusterName: production-cluster
+    registry: null

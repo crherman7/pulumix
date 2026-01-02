@@ -44,6 +44,7 @@ export const ERROR_CODES = {
   VALIDATION_FAILED: 'PULUMIX_E302',
   DEPENDENCY_CYCLE: 'PULUMIX_E303',
   PASSPHRASE_REQUIRED: 'PULUMIX_E304',
+  HOOK_FAILED: 'PULUMIX_E305',
 
   // Provider Errors (E400-E499)
   PROVIDER_INIT_FAILED: 'PULUMIX_E400',
@@ -123,7 +124,7 @@ export interface BuildError extends BaseError {
  */
 export interface DeploymentError extends BaseError {
   readonly _tag: 'DeploymentError'
-  readonly type: 'PulumiFailed' | 'ResourceFailed' | 'ValidationFailed' | 'DependencyCycle'
+  readonly type: 'PulumiFailed' | 'ResourceFailed' | 'ValidationFailed' | 'DependencyCycle' | 'HookFailed'
   readonly resourceUrn?: string
 }
 
@@ -252,6 +253,7 @@ export function createDeploymentError(
     'ResourceFailed': ERROR_CODES.RESOURCE_FAILED,
     'ValidationFailed': ERROR_CODES.VALIDATION_FAILED,
     'DependencyCycle': ERROR_CODES.DEPENDENCY_CYCLE,
+    'HookFailed': ERROR_CODES.HOOK_FAILED,
   }
 
   return {
@@ -436,6 +438,15 @@ export function getErrorRemediation(errorType: string): ErrorRemediation | undef
         'Verify your Pulumi credentials are configured',
         'Ensure stack exists: pulumi stack ls',
         'Check resource configurations for errors'
+      ],
+    },
+    'HookFailed': {
+      summary: 'Lifecycle hook script failed',
+      steps: [
+        'Check the hook script output for errors',
+        'Verify the script exists and is executable',
+        'Ensure all required environment variables are set',
+        'Try running the script manually to debug'
       ],
     },
     'StackNotFound': {

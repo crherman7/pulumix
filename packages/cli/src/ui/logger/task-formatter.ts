@@ -129,12 +129,17 @@ const formatTask = (task: Task): string => {
     task.status === Status.Creating ||
     task.status === Status.Updating ||
     task.status === Status.Deleting ||
+    task.status === Status.Replacing ||
     task.status === Status.Refreshing ||
     task.status === Status.Running
 
+  const isFailed = task.status === Status.Failed
+
   const icon = isRunning
     ? color(task.spinner())
-    : color(task.change === Change.Unchanged ? ' ' : task.change)
+    : isFailed
+      ? chalk.bold.red('✗')
+      : color(task.change === Change.Unchanged ? ' ' : task.change)
 
   const completedTime = task.completedTime ?? new Date()
   const delta = (completedTime.getTime() - task.startTime.getTime()) / 1000
@@ -244,6 +249,7 @@ export const processProgress = (update: TaskUpdate, isDynamic: boolean): void =>
       a.status === Status.Creating ||
       a.status === Status.Updating ||
       a.status === Status.Deleting ||
+      a.status === Status.Replacing ||
       a.status === Status.Refreshing ||
       a.status === Status.Running
 
@@ -251,6 +257,7 @@ export const processProgress = (update: TaskUpdate, isDynamic: boolean): void =>
       b.status === Status.Creating ||
       b.status === Status.Updating ||
       b.status === Status.Deleting ||
+      b.status === Status.Replacing ||
       b.status === Status.Refreshing ||
       b.status === Status.Running
 

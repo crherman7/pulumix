@@ -311,6 +311,9 @@ Run services locally with hot module replacement while dependencies run in the c
 ### 🎛️ **Stack Configuration**
 Per-environment config (dev, staging, prod) in `pulumix.yaml`.
 
+### 🪝 **Lifecycle Hooks**
+Run scripts at deployment stages (`pre-build`, `post-build`, `pre-deploy`, `post-deploy`). Infrastructure-agnostic—use any tools (k3d, kind, AWS CLI, etc.).
+
 ### 🚀 **Built on Pulumi**
 Full access to Pulumi SDK. Any cloud, any resource.
 
@@ -320,9 +323,11 @@ Full access to Pulumi SDK. Any cloud, any resource.
 
 See the [example project](./apps/example) for a complete multi-service deployment:
 
-- **provider** - Creates k3d cluster with local registry
+- **provider** - Provides cluster configuration outputs
 - **ingress** - Configures ingress (uses k3d's built-in Traefik)
 - **hello-world** - Builds and deploys HTTP service with Ingress
+
+The example uses a `pre-build` hook to ensure a k3d cluster exists before building images.
 
 ```bash
 cd apps/example
@@ -338,8 +343,8 @@ Configuration
     • ingress v1.0.0
     • hello-world v1.0.0
 
-Cluster
-  + hello-world created (2.1s)
+Hooks
+  + k3d Cluster created (2.1s)
 
 Build
   + hello-world (a1b2c3d4e5f6) created (4.2s)
@@ -442,15 +447,22 @@ services:
 stacks:
   local:
     namespace: dev
-    # Inherits file backend from project default
 
   production:
     namespace: prod
-    # Override backend for production
     backend:
       type: gcs
       bucket: my-company-pulumi-state
       prefix: production/
+
+# Lifecycle hooks (run scripts at deployment stages)
+hooks:
+  local:
+    - stage: pre-build
+      run: "./scripts/ensure-cluster.sh"
+      description: Ensure k3d cluster exists
+      env:
+        CLUSTER_NAME: my-cluster
 ```
 
 ### Backend Configuration
@@ -542,6 +554,67 @@ stacks:
       bucket: my-company-state
       prefix: production/
 ```
+
+### Lifecycle Hooks
+
+Run scripts at specific stages of the deployment lifecycle. Hooks are configured per-stack and execute in order.
+
+**Available stages:**
+
+| Stage | When | Use Case |
+|-------|------|----------|
+| `pre-build` | Before Docker image builds | Ensure cluster/registry exists |
+| `post-build` | After images built | Scan images, push to external registry |
+| `pre-deploy` | Before Pulumi runs | Validate credentials, configure kubectl |
+| `post-deploy` | After deployment | Smoke tests, notifications |
+
+**Hook configuration:**
+
+```yaml
+hooks:
+  local:
+    - stage: pre-build
+      run: "./scripts/ensure-cluster.sh"
+      description: Ensure k3d cluster exists
+      env:
+        CLUSTER_NAME: my-cluster
+        REGISTRY_PORT: "5001"
+      timeout: 300000        # 5 minutes (default)
+      continueOnFailure: false  # Stop on failure (default)
+
+    - stage: post-deploy
+      run: "./scripts/smoke-test.sh"
+      description: Run smoke tests
+      continueOnFailure: true   # Continue even if tests fail
+
+  production:
+    - stage: pre-deploy
+      run: "./scripts/check-aws-creds.sh"
+```
+
+**Example hook script** (`scripts/ensure-cluster.sh`):
+
+```bash
+#!/bin/bash
+set -e
+
+CLUSTER_NAME="${CLUSTER_NAME:-my-cluster}"
+REGISTRY_PORT="${REGISTRY_PORT:-5001}"
+
+# Check if cluster exists
+if k3d cluster list | grep -q "$CLUSTER_NAME"; then
+  echo "Cluster '$CLUSTER_NAME' already exists"
+  exit 0
+fi
+
+echo "Creating k3d cluster..."
+k3d cluster create "$CLUSTER_NAME" \
+  --registry-create "${CLUSTER_NAME}-registry:0.0.0.0:${REGISTRY_PORT}" \
+  --port "80:80@loadbalancer" \
+  --wait
+```
+
+Hooks keep Pulumix infrastructure-agnostic. The core orchestrator doesn't know about k3d, kind, or any specific tool—it just runs your scripts.
 
 ### Service Manifest (`services/my-api/pulumix.yaml`)
 

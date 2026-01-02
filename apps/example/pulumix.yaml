@@ -15,6 +15,20 @@ services:
 stacks:
   local:
     namespace: hello-world
+    # Registry config for image tagging
+    hostRegistry: localhost:5001
+    clusterRegistry: hello-world-registry:5000
 
   production:
     namespace: hello-world-prod
+
+# Lifecycle hooks
+hooks:
+  local:
+    - stage: pre-build
+      run: "./scripts/ensure-cluster.sh"
+      description: k3d Cluster
+      env:
+        CLUSTER_NAME: hello-world
+        REGISTRY_PORT: "5001"
+        LB_PORT: "80"

@@ -1,12 +1,10 @@
 /**
  * Provider Service
  *
- * Sets up the Kubernetes cluster based on stack configuration.
- * - local: Creates k3d cluster with registry
- * - production: Assumes cluster exists
+ * Provides cluster information as outputs.
+ * Cluster creation is handled by hooks (scripts/ensure-cluster.sh).
  */
 
-import { spawnSync } from 'child_process'
 import { ServiceContext, ServiceResult } from '@pulumix/core'
 
 /**
@@ -22,55 +20,12 @@ export interface ProviderOutputs {
 }
 
 export default async (ctx: ServiceContext): Promise<ServiceResult<ProviderOutputs>> => {
-  const k3d = ctx.config.k3d as {
-    enabled?: boolean
-    clusterName?: string
-    port?: number
-    registryPort?: number
-  } | undefined
-
-  // If k3d is enabled, ensure cluster exists
-  if (k3d?.enabled) {
-    const clusterName = k3d.clusterName || 'pulumix-dev'
-    const port = k3d.port || 80
-    const registryPort = k3d.registryPort || 5001
-
-    // Check if cluster exists
-    const listResult = spawnSync('k3d', ['cluster', 'list'], { encoding: 'utf-8' })
-    const clusterExists = listResult.stdout?.includes(clusterName)
-
-    if (!clusterExists) {
-      // Create cluster with registry (this is a fallback - Bootstrap phase handles this)
-      const createResult = spawnSync('k3d', [
-        'cluster', 'create', clusterName,
-        '--registry-create', `${clusterName}-registry:0.0.0.0:${registryPort}`,
-        '--port', `${port}:80@loadbalancer`,
-        '--agents', '2',
-        '--wait'
-      ], { stdio: 'inherit' })
-
-      if (createResult.error) {
-        throw new Error(`Failed to create k3d cluster: ${createResult.error.message}`)
-      }
-      if (createResult.status !== 0) {
-        throw new Error(`k3d cluster create exited with code ${createResult.status}`)
-      }
-    }
-
-    return {
-      outputs: {
-        clusterName,
-        registry: `localhost:${registryPort}`,
-        kubeconfig: `k3d-${clusterName}`
-      }
-    }
-  }
-
-  // Non-k3d: assume cluster exists
+  // Simply return configured values - cluster setup is done via hooks
   return {
     outputs: {
       clusterName: (ctx.config.clusterName as string) || 'default',
-      registry: (ctx.config.registry as string) || null
+      registry: (ctx.config.registry as string) || null,
+      kubeconfig: ctx.config.kubeconfig as string | undefined
     }
   }
 }

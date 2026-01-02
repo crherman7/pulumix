@@ -358,6 +358,62 @@ export interface SecretsConfig {
 }
 
 // ============================================================================
+// Build Configuration Types
+// ============================================================================
+
+/**
+ * Docker build configuration.
+ *
+ * Configures how the service's Docker image is built, including context path
+ * and Dockerfile location. Useful for monorepos where the build context needs
+ * to include files from the repository root (e.g., pnpm-lock.yaml).
+ *
+ * @example
+ * Build with monorepo root as context:
+ * ```yaml
+ * build:
+ *   context: root
+ *   dockerfile: services/api/Dockerfile
+ * ```
+ *
+ * @example
+ * Build with custom relative context:
+ * ```yaml
+ * build:
+ *   context: ../..
+ *   dockerfile: Dockerfile
+ * ```
+ *
+ * @example
+ * Default behavior (service directory as context):
+ * ```yaml
+ * build:
+ *   context: .
+ * ```
+ */
+export interface BuildConfig {
+  /**
+   * Build context path.
+   *
+   * - `"root"` - Use the project root as build context (for monorepos)
+   * - `"."` - Use the service directory (default)
+   * - Relative path (e.g., `"../.."`) - Relative to service directory
+   */
+  context?: 'root' | '.' | string
+
+  /**
+   * Path to Dockerfile relative to the build context.
+   *
+   * When using `context: root`, this should be the path from root to the Dockerfile.
+   * Defaults to `"Dockerfile"` in the service directory.
+   *
+   * @example "services/api/Dockerfile" (when context is root)
+   * @example "Dockerfile" (when context is service directory)
+   */
+  dockerfile?: string
+}
+
+// ============================================================================
 // Backend Configuration Types
 // ============================================================================
 
@@ -489,16 +545,83 @@ export interface StackConfig {
   [key: string]: unknown
 }
 
+// ============================================================================
+// Hooks Configuration Types
+// ============================================================================
+
+/**
+ * Hook stage - when the hook runs in the deployment lifecycle.
+ *
+ * @example
+ * ```yaml
+ * hooks:
+ *   local:
+ *     - stage: pre-build
+ *       run: "./scripts/ensure-cluster.sh"
+ * ```
+ */
+export type HookStage = 'pre-build' | 'post-build' | 'pre-deploy' | 'post-deploy'
+
+/**
+ * Individual hook definition.
+ *
+ * Defines a script to run at a specific stage in the deployment lifecycle.
+ *
+ * @example
+ * ```yaml
+ * - stage: pre-build
+ *   run: "./scripts/ensure-cluster.sh"
+ *   env:
+ *     CLUSTER_NAME: my-cluster
+ *   timeout: 300000
+ *   continueOnFailure: false
+ * ```
+ */
+export interface HookDefinition {
+  /** When to run this hook */
+  stage: HookStage
+  /** Command or script to run */
+  run: string
+  /** Environment variables to pass to the script */
+  env?: Record<string, string>
+  /** Working directory relative to project root */
+  cwd?: string
+  /** Timeout in milliseconds (default: 300000 = 5 minutes) */
+  timeout?: number
+  /** Continue deployment if hook fails (default: false) */
+  continueOnFailure?: boolean
+  /** Description shown in UI */
+  description?: string
+}
+
+/**
+ * Hooks configuration per stack.
+ *
+ * Maps stack names to arrays of hook definitions.
+ *
+ * @example
+ * ```yaml
+ * hooks:
+ *   local:
+ *     - stage: pre-build
+ *       run: "./scripts/ensure-cluster.sh"
+ *   production:
+ *     - stage: pre-deploy
+ *       run: "./scripts/check-creds.sh"
+ * ```
+ */
+export type HooksConfig = Record<string, HookDefinition[]>
+
 /**
  * Root project configuration (pulumix.yaml at project root).
  *
- * Defines project-wide settings including default backend and stack configurations.
+ * Defines project-wide settings including default backend, stack configurations,
+ * and lifecycle hooks.
  *
  * @example
  * ```yaml
  * name: my-project
  *
- * # Project-level default backend (inherited by all stacks)
  * backend:
  *   type: file
  *   path: dist/
@@ -510,14 +633,18 @@ export interface StackConfig {
  * stacks:
  *   local:
  *     namespace: my-project-dev
- *     # Inherits file backend from project default
- *
  *   production:
  *     namespace: my-project-prod
- *     backend:
- *       type: gcs
- *       bucket: my-company-pulumi-state
- *       prefix: production/
+ *
+ * hooks:
+ *   local:
+ *     - stage: pre-build
+ *       run: "./scripts/ensure-cluster.sh"
+ *       env:
+ *         CLUSTER_NAME: my-cluster
+ *   production:
+ *     - stage: pre-deploy
+ *       run: "./scripts/check-creds.sh"
  * ```
  */
 export interface ProjectConfig {
@@ -531,6 +658,8 @@ export interface ProjectConfig {
   }
   /** Stack-specific configurations */
   stacks?: Record<string, StackConfig>
+  /** Lifecycle hooks per stack */
+  hooks?: HooksConfig
 }
 
 // ============================================================================
@@ -594,6 +723,9 @@ export interface ProjectConfig {
 export interface ServiceManifest {
   /** Service metadata */
   metadata: ServiceMetadata
+
+  /** Docker build configuration */
+  build?: BuildConfig
 
   /** Observability configuration */
   observability?: ObservabilityConfig
