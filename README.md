@@ -14,7 +14,7 @@
     <img src="https://img.shields.io/npm/v/@pulumix/core?logo=npm" alt="core npm version" />
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/crherman7/pulumix" alt="license" />
+    <img src="https://img.shields.io/github/license/crherman7/pulumix?branch=develop" alt="license" />
   </a>
 </p>
 
