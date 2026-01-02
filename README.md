@@ -7,6 +7,18 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/@pulumix/cli">
+    <img src="https://img.shields.io/npm/v/@pulumix/cli?logo=npm" alt="npm version" />
+  </a>
+  <a href="https://www.npmjs.com/package/@pulumix/core">
+    <img src="https://img.shields.io/npm/v/@pulumix/core?logo=npm" alt="core npm version" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/crherman7/pulumix" alt="license" />
+  </a>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> •
   <a href="#features">Features</a> •
   <a href="#how-it-works">How It Works</a> •
@@ -981,7 +993,7 @@ Contributions welcome! Please open an issue or PR.
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourorg/pulumix.git
+git clone https://github.com/crherman7/pulumix.git
 cd pulumix
 
 # Install tools via mise
@@ -1026,7 +1038,7 @@ MIT
 
 ## Community
 
-- [GitHub Issues](https://github.com/yourorg/pulumix/issues)
-- [Discussions](https://github.com/yourorg/pulumix/discussions)
+- [GitHub Issues](https://github.com/crherman7/pulumix/issues)
+- [Discussions](https://github.com/crherman7/pulumix/discussions)
 
 Built with ❤️ by developers who believe infrastructure should be composable.
