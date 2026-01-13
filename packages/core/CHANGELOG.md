@@ -1,5 +1,24 @@
 # @pulumix/core
 
+## 0.7.0
+
+### Minor Changes
+
+- Add project configuration validation and improve infrastructure-agnostic types
+
+  **New features:**
+
+  - JSON Schema validation for root `pulumix.yaml` project configuration
+  - New `validateProjectConfig` and `validateProjectConfigOrThrow` exports from core
+  - Added `project-config.schema.json` with backend and hooks validation
+
+  **Breaking changes:**
+
+  - Renamed `rbac` to `accessControl` in security configuration
+  - Renamed `RBACConfig` type to `AccessControlConfig`
+  - Removed `namespace` from `ServiceContext` - access via `ctx.globalConfig.namespace` instead
+  - `accessControl.identity` replaces `rbac.serviceAccount` for infrastructure-agnostic naming
+
 ## 0.6.0
 
 ### Minor Changes
