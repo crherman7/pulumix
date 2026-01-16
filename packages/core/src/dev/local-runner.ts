@@ -5,8 +5,41 @@
  */
 
 import { spawn } from 'child_process'
+import * as fs from 'fs'
 import path from 'path'
 import { DevServerHandle, LocalDevService } from './types'
+
+/**
+ * Patterns that may indicate shell injection attempts.
+ * These are logged as warnings but don't block execution since
+ * commands come from trusted pulumix.yaml files.
+ */
+const SUSPICIOUS_PATTERNS = [
+  /\$\(/,           // Command substitution $(...)
+  /`[^`]+`/,        // Backtick command substitution
+  /;\s*rm\s/,       // rm after semicolon
+  /&&\s*rm\s/,      // rm after &&
+  /\|\s*rm\s/,      // rm after pipe
+  />\s*\/dev\/sd/,  // Writing to block devices
+  /;\s*curl\s/,     // curl after semicolon (potential exfil)
+  /;\s*wget\s/,     // wget after semicolon
+]
+
+/**
+ * Validate a dev command for potentially dangerous patterns.
+ * Returns warnings for suspicious patterns found.
+ */
+export function validateDevCommand(command: string): string[] {
+  const warnings: string[] = []
+
+  for (const pattern of SUSPICIOUS_PATTERNS) {
+    if (pattern.test(command)) {
+      warnings.push(`Command contains suspicious pattern: ${pattern.source}`)
+    }
+  }
+
+  return warnings
+}
 
 /**
  * Parse a dev command string into command and arguments
@@ -33,12 +66,31 @@ export function runDevServer(
   onOutput: (serviceName: string, line: string) => void
 ): DevServerHandle {
   const { service, devConfig, localPort } = localService
+
+  // Command should always be defined for local dev services (validated upstream)
+  if (!devConfig.command) {
+    throw new Error(`Service '${service.name}' has no dev command configured`)
+  }
+
   const { cmd, args } = parseDevCommand(devConfig.command)
 
-  // Build the working directory
+  // Validate command for suspicious patterns
+  const warnings = validateDevCommand(devConfig.command)
+  for (const warning of warnings) {
+    console.warn(`[${service.name}] Warning: ${warning}`)
+  }
+
+  // Build and validate the working directory
   const cwd = devConfig.cwd
     ? path.resolve(service.path, devConfig.cwd)
     : service.path
+
+  if (!fs.existsSync(cwd)) {
+    throw new Error(
+      `Dev working directory does not exist: ${cwd}` +
+      (devConfig.cwd ? ` (configured as '${devConfig.cwd}' relative to ${service.path})` : '')
+    )
+  }
 
   // Merge environment variables
   // Priority: devConfig.env > passed env > process.env
@@ -54,6 +106,7 @@ export function runDevServer(
     env: processEnv,
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: true, // Use shell to handle npm/pnpm scripts properly
+    detached: true, // Create process group for clean shutdown
   })
 
   // Handle stdout
@@ -89,13 +142,23 @@ export function runDevServer(
 
   return {
     kill: () => {
-      // Try graceful shutdown first
-      proc.kill('SIGTERM')
+      // Kill entire process group (negative PID) to ensure child processes are terminated
+      try {
+        if (proc.pid) {
+          process.kill(-proc.pid, 'SIGTERM')
+        }
+      } catch {
+        // Process may already be dead
+      }
 
       // Force kill after 5 seconds if still running
       setTimeout(() => {
-        if (!proc.killed) {
-          proc.kill('SIGKILL')
+        try {
+          if (proc.pid && !proc.killed) {
+            process.kill(-proc.pid, 'SIGKILL')
+          }
+        } catch {
+          // Process may already be dead
         }
       }, 5000)
     },

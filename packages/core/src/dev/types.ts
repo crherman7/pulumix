@@ -5,17 +5,31 @@
 import { DiscoveredService } from '../types/service'
 
 /**
+ * Configuration for how a service is exposed when running in cluster
+ */
+export interface DevExposeConfig {
+  /** Port to forward (e.g., 5432 for postgres) */
+  readonly port: number
+  /** URL protocol (http, postgres, redis, etc.) */
+  readonly protocol?: string
+  /** Environment variable name for consumers (e.g., "DATABASE_URL") */
+  readonly envVar?: string
+}
+
+/**
  * Dev configuration from service's pulumix.yaml
  */
 export interface DevConfig {
-  /** Command to run for local development (e.g., "npm run dev") */
-  readonly command: string
+  /** Command to run for local development (e.g., "npm run dev") - required for local dev, optional for expose-only */
+  readonly command?: string
   /** Port the local dev server listens on (default: 3000) */
   readonly port?: number
   /** Additional environment variables for dev mode */
   readonly env?: Record<string, string>
   /** Working directory relative to service path (default: ".") */
   readonly cwd?: string
+  /** How this service should be exposed when running in cluster */
+  readonly expose?: DevExposeConfig
 }
 
 /**

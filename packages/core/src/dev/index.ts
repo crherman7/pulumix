@@ -18,6 +18,7 @@ import { discoverServices } from '../orchestrator'
 import { OrchestratorEventEmitter, createEventEmitter } from '../orchestrator/events'
 import {
   DevConfig,
+  DevExposeConfig,
   DevOrchestratorConfig,
   DevOrchestratorResult,
   LocalDevService,
@@ -31,7 +32,7 @@ import {
 } from './types'
 import { checkKubectl, startPortForwards, stopPortForwards } from './port-forward'
 import { runDevServers, stopDevServers } from './local-runner'
-import { buildAllDevEnvironments, getServiceProtocol, isDatabaseService } from './env-builder'
+import { buildAllDevEnvironments, getServiceProtocol, isDatabaseService, serviceToEnvVar } from './env-builder'
 import {
   swapServiceToLocal,
   restoreFromStaleState,
@@ -45,17 +46,154 @@ export * from './env-builder'
 export * from './service-swap'
 
 /**
- * Extract dev config from service's raw config
+ * Validation error for dev config
+ */
+export class DevConfigValidationError extends Error {
+  constructor(serviceName: string, field: string, message: string) {
+    super(`Invalid dev config for '${serviceName}': ${field} ${message}`)
+    this.name = 'DevConfigValidationError'
+  }
+}
+
+/**
+ * Extract and validate dev config from service's raw config
  */
 function getDevConfig(service: DiscoveredService): DevConfig | undefined {
   const dev = service.rawConfig.dev as Record<string, unknown> | undefined
   if (!dev) return undefined
 
+  // Validate command if provided (now optional)
+  let command: string | undefined
+  if (dev.command !== undefined) {
+    if (typeof dev.command !== 'string' || dev.command.trim() === '') {
+      throw new DevConfigValidationError(
+        service.name,
+        'command',
+        'must be a non-empty string'
+      )
+    }
+    command = dev.command
+  }
+
+  // Validate port if provided
+  let port: number | undefined
+  if (dev.port !== undefined) {
+    if (typeof dev.port !== 'number' || !Number.isInteger(dev.port)) {
+      throw new DevConfigValidationError(
+        service.name,
+        'port',
+        'must be an integer'
+      )
+    }
+    if (dev.port < 1 || dev.port > 65535) {
+      throw new DevConfigValidationError(
+        service.name,
+        'port',
+        'must be between 1 and 65535'
+      )
+    }
+    port = dev.port
+  }
+
+  // Validate cwd if provided
+  if (dev.cwd !== undefined && typeof dev.cwd !== 'string') {
+    throw new DevConfigValidationError(
+      service.name,
+      'cwd',
+      'must be a string'
+    )
+  }
+
+  // Validate env if provided
+  if (dev.env !== undefined) {
+    if (typeof dev.env !== 'object' || dev.env === null || Array.isArray(dev.env)) {
+      throw new DevConfigValidationError(
+        service.name,
+        'env',
+        'must be an object'
+      )
+    }
+    for (const [key, value] of Object.entries(dev.env)) {
+      if (typeof value !== 'string') {
+        throw new DevConfigValidationError(
+          service.name,
+          `env.${key}`,
+          'must be a string'
+        )
+      }
+    }
+  }
+
+  // Validate expose if provided
+  let expose: DevExposeConfig | undefined
+  if (dev.expose !== undefined) {
+    const exp = dev.expose as Record<string, unknown>
+
+    // Validate port (required for expose)
+    if (typeof exp.port !== 'number' || !Number.isInteger(exp.port)) {
+      throw new DevConfigValidationError(
+        service.name,
+        'expose.port',
+        'must be an integer'
+      )
+    }
+    if (exp.port < 1 || exp.port > 65535) {
+      throw new DevConfigValidationError(
+        service.name,
+        'expose.port',
+        'must be between 1 and 65535'
+      )
+    }
+
+    // Validate protocol if provided
+    if (exp.protocol !== undefined && typeof exp.protocol !== 'string') {
+      throw new DevConfigValidationError(
+        service.name,
+        'expose.protocol',
+        'must be a string'
+      )
+    }
+
+    // Validate envVar if provided
+    if (exp.envVar !== undefined) {
+      if (typeof exp.envVar !== 'string') {
+        throw new DevConfigValidationError(
+          service.name,
+          'expose.envVar',
+          'must be a string'
+        )
+      }
+      if (!/^[A-Z][A-Z0-9_]*$/.test(exp.envVar)) {
+        throw new DevConfigValidationError(
+          service.name,
+          'expose.envVar',
+          'must be uppercase with underscores (e.g., DATABASE_URL)'
+        )
+      }
+    }
+
+    expose = {
+      port: exp.port,
+      protocol: exp.protocol as string | undefined,
+      envVar: exp.envVar as string | undefined,
+    }
+  }
+
+  // Must have at least command or expose
+  if (!command && !expose) {
+    throw new DevConfigValidationError(
+      service.name,
+      'dev',
+      'must have either command or expose'
+    )
+  }
+
   return {
-    command: (dev.command as string) || 'npm run dev',
-    port: (dev.port as number) || 3000,
+    command,
+    port,
     env: dev.env as Record<string, string> | undefined,
     cwd: dev.cwd as string | undefined,
+    expose,
   }
 }
 
@@ -100,6 +238,7 @@ function hasRunningPods(service: DiscoveredService): boolean {
 /**
  * Compute port-forward mappings for cluster services
  * Only includes services that have running pods (not infrastructure-only)
+ * Uses dev.expose config if available, otherwise falls back to inference
  */
 function computePortForwardMappings(
   clusterServices: DiscoveredService[],
@@ -114,33 +253,49 @@ function computePortForwardMappings(
       continue
     }
 
-    const serviceName = service.name.toLowerCase()
-    const protocol = getServiceProtocol(serviceName)
+    // Try to get expose config from service's dev section
+    const devConfig = getDevConfig(service)
+    const expose = devConfig?.expose
 
-    // Database services use their standard port
-    if (isDatabaseService(serviceName)) {
-      const standardPort = Object.entries(STANDARD_PORTS).find(
-        ([key]) => serviceName.includes(key)
-      )?.[1] ?? 80
-
+    if (expose) {
+      // Use explicit expose configuration
       mappings.push({
         serviceName: service.name,
         namespace,
-        remotePort: standardPort,
-        localPort: standardPort,
-        envVar: `${service.name.toUpperCase().replace(/-/g, '_')}_URL`,
-        protocol,
+        remotePort: expose.port,
+        localPort: expose.port, // Use same port locally for simplicity
+        envVar: expose.envVar || serviceToEnvVar(service.name),
+        protocol: expose.protocol || 'http',
       })
     } else {
-      // HTTP services get auto-assigned ports starting at HTTP_PORT_BASE
-      mappings.push({
-        serviceName: service.name,
-        namespace,
-        remotePort: 80, // All HTTP services expose port 80
-        localPort: httpPortCounter++,
-        envVar: `${service.name.toUpperCase().replace(/-/g, '_')}_URL`,
-        protocol: 'http',
-      })
+      // Fall back to inference based on service name
+      const serviceName = service.name.toLowerCase()
+      const protocol = getServiceProtocol(serviceName)
+
+      if (isDatabaseService(serviceName)) {
+        const standardPort = Object.entries(STANDARD_PORTS).find(
+          ([key]) => serviceName.includes(key)
+        )?.[1] ?? 80
+
+        mappings.push({
+          serviceName: service.name,
+          namespace,
+          remotePort: standardPort,
+          localPort: standardPort,
+          envVar: serviceToEnvVar(service.name),
+          protocol,
+        })
+      } else {
+        // HTTP services get auto-assigned ports starting at HTTP_PORT_BASE
+        mappings.push({
+          serviceName: service.name,
+          namespace,
+          remotePort: 80, // All HTTP services expose port 80
+          localPort: httpPortCounter++,
+          envVar: serviceToEnvVar(service.name),
+          protocol: 'http',
+        })
+      }
     }
   }
 
@@ -205,12 +360,12 @@ export class DevOrchestrator {
 
       for (const service of devServices) {
         const devConfig = getDevConfig(service)
-        if (!devConfig) {
+        if (!devConfig || !devConfig.command) {
           return throwE(createConfigError(
             'MissingRequiredField',
-            `Service '${service.name}' is missing 'dev' config in pulumix.yaml. Add:\n\ndev:\n  command: npm run dev\n  port: 3000`,
+            `Service '${service.name}' cannot run locally - missing 'dev.command' in pulumix.yaml. Add:\n\ndev:\n  command: npm run dev\n  port: 3000`,
             stackName,
-            'dev'
+            'dev.command'
           ))
         }
 
@@ -219,6 +374,22 @@ export class DevOrchestrator {
           devConfig,
           localPort: devConfig.port || devPortCounter++,
         })
+      }
+
+      // Check for port conflicts among dev services
+      const portToService = new Map<number, string>()
+      for (const ls of localServices) {
+        const existing = portToService.get(ls.localPort)
+        if (existing) {
+          return throwE(createConfigError(
+            'InvalidConfigFormat',
+            `Port conflict: '${ls.service.name}' and '${existing}' both use port ${ls.localPort}. ` +
+            `Configure different ports in each service's dev.port setting.`,
+            stackName,
+            'dev.port'
+          ))
+        }
+        portToService.set(ls.localPort, ls.service.name)
       }
 
       // Compute cluster services (transitive deps minus dev services)

@@ -259,6 +259,58 @@
         }
       }
     },
+    "dev": {
+      "type": "object",
+      "description": "Local development configuration for running the service with hot reload",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Command to run for local development (e.g., 'npm run dev', 'pnpm dev')",
+          "minLength": 1
+        },
+        "port": {
+          "type": "integer",
+          "description": "Port the local dev server listens on",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 3000
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory relative to service path (e.g., 'src')"
+        },
+        "env": {
+          "type": "object",
+          "description": "Additional environment variables for dev mode",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "expose": {
+          "type": "object",
+          "description": "How this service should be exposed when running in cluster (for port-forwarding to local dev)",
+          "properties": {
+            "port": {
+              "type": "integer",
+              "description": "Port to forward (e.g., 5432 for postgres, 80 for HTTP)",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "protocol": {
+              "type": "string",
+              "description": "URL protocol for connection string (e.g., 'postgres', 'redis', 'http')",
+              "enum": ["http", "https", "postgres", "mysql", "redis", "mongodb", "amqp", "kafka"]
+            },
+            "envVar": {
+              "type": "string",
+              "description": "Environment variable name for consumers (e.g., 'DATABASE_URL')",
+              "pattern": "^[A-Z][A-Z0-9_]*$"
+            }
+          },
+          "required": ["port"]
+        }
+      }
+    },
     "stacks": {
       "type": "object",
       "description": "Stack-specific configuration",

@@ -848,6 +848,12 @@ export class Orchestrator {
       const hostRegistry = getConfigValue<string>(globalConfig, 'hostRegistry').orDefault('localhost:5001')
       const clusterRegistry = getConfigValue<string>(globalConfig, 'clusterRegistry').orDefault(hostRegistry)
 
+      // Get platform config for docker buildx bake (e.g., linux/amd64, linux/arm64)
+      const platformConfig = getConfigValue<string | string[]>(globalConfig, 'platform').extract()
+      const platforms = platformConfig
+        ? (Array.isArray(platformConfig) ? platformConfig : [platformConfig])
+        : undefined
+
       // Get hooks for this stack
       const hooks = getHooksForStack(rootConfig.hooks, config.stackName)
 
@@ -909,7 +915,8 @@ export class Orchestrator {
             contextPath: build.contextPath,
             dockerfile: build.dockerfile,
             tag: build.imageTag,
-            contentHash: build.contentHash
+            contentHash: build.contentHash,
+            platforms,
           }))
 
           const bakeConfig = generateBakeConfig(bakeServices)

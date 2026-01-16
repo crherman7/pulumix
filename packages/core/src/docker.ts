@@ -339,6 +339,7 @@ export interface BakeTarget {
   dockerfile: string
   tags: string[]
   args?: Record<string, string>
+  platforms?: string[]
 }
 
 /**
@@ -428,6 +429,7 @@ export interface BakeServiceConfig {
   dockerfile: string
   tag: string
   contentHash: string
+  platforms?: string[]
 }
 
 /**
@@ -453,7 +455,8 @@ export const generateBakeConfig = (
     targets[targetName] = {
       context: service.contextPath,
       dockerfile: service.dockerfile,
-      tags: [service.tag]
+      tags: [service.tag],
+      ...(service.platforms && { platforms: service.platforms })
     }
   }
 
