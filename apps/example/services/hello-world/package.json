@@ -6,7 +6,6 @@
   "main": "pulumix.ts",
   "dependencies": {
     "@pulumix/core": "workspace:*",
-    "@hello-world/provider": "workspace:*",
-    "@hello-world/ingress": "workspace:*"
+    "@pulumix/k8s-platform": "workspace:*"
   }
 }

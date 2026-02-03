@@ -5,31 +5,17 @@
 import { DiscoveredService } from '../types/service'
 
 /**
- * Configuration for how a service is exposed when running in cluster
- */
-export interface DevExposeConfig {
-  /** Port to forward (e.g., 5432 for postgres) */
-  readonly port: number
-  /** URL protocol (http, postgres, redis, etc.) */
-  readonly protocol?: string
-  /** Environment variable name for consumers (e.g., "DATABASE_URL") */
-  readonly envVar?: string
-}
-
-/**
  * Dev configuration from service's pulumix.yaml
  */
 export interface DevConfig {
-  /** Command to run for local development (e.g., "npm run dev") - required for local dev, optional for expose-only */
-  readonly command?: string
+  /** Command to run for local development (e.g., "npm run dev") */
+  readonly command: string
   /** Port the local dev server listens on (default: 3000) */
   readonly port?: number
-  /** Additional environment variables for dev mode */
+  /** Additional environment variables for dev mode (overrides auto-computed) */
   readonly env?: Record<string, string>
   /** Working directory relative to service path (default: ".") */
   readonly cwd?: string
-  /** How this service should be exposed when running in cluster */
-  readonly expose?: DevExposeConfig
 }
 
 /**
@@ -44,10 +30,6 @@ export interface PortForwardMapping {
   readonly remotePort: number
   /** Local port to forward to */
   readonly localPort: number
-  /** Environment variable name to inject (e.g., "API_URL") */
-  readonly envVar: string
-  /** Protocol for URL generation (http, redis, postgres, etc.) */
-  readonly protocol: string
 }
 
 /**
@@ -98,18 +80,12 @@ export interface DevOrchestratorConfig {
   readonly stackName: string
   /** Services to run locally in dev mode */
   readonly devServices: string[]
-  /** Callback for Pulumi output during deployment */
+  /** Kubernetes context override (default: current context) */
+  readonly kubeContext?: string
+  /** Callback for status/log messages */
+  readonly onLog?: (message: string) => void
+  /** Callback for dev server output */
   readonly onOutput?: (message: string) => void
-}
-
-/**
- * Handle to a swapped service (for restore)
- */
-export interface ServiceSwapHandle {
-  readonly serviceName: string
-  readonly namespace: string
-  readonly localPort: number
-  readonly restore: () => Promise<void>
 }
 
 /**
@@ -121,9 +97,7 @@ export interface DevOrchestratorResult {
   /** Stack name */
   readonly stack: string
   /** Kubernetes namespace */
-  readonly namespace?: string
-  /** Base domain for ingress URLs */
-  readonly baseDomain?: string
+  readonly namespace: string
   /** Services running in dev mode */
   readonly devServices: LocalDevService[]
   /** Active port forwards to cluster services */
@@ -132,47 +106,7 @@ export interface DevOrchestratorResult {
   readonly devServerHandles: DevServerHandle[]
   /** Handles to running port-forwards */
   readonly portForwardHandles: PortForwardHandle[]
-  /** Handles to swapped services */
-  readonly serviceSwapHandles?: ServiceSwapHandle[]
-  /** Ingress URLs pointing to local dev servers */
-  readonly ingressUrls?: string[]
 }
-
-/**
- * Standard ports for common services
- */
-export const STANDARD_PORTS: Record<string, number> = {
-  postgres: 5432,
-  postgresql: 5432,
-  mysql: 3306,
-  redis: 6379,
-  mongodb: 27017,
-  mongo: 27017,
-  rabbitmq: 5672,
-  kafka: 9092,
-  elasticsearch: 9200,
-  memcached: 11211,
-}
-
-/**
- * Protocol prefixes for URL generation
- */
-export const PROTOCOL_PREFIXES: Record<string, string> = {
-  postgres: 'postgres',
-  postgresql: 'postgres',
-  mysql: 'mysql',
-  redis: 'redis',
-  mongodb: 'mongodb',
-  mongo: 'mongodb',
-  http: 'http',
-  https: 'https',
-}
-
-/**
- * Base port for auto-assigned HTTP services
- * HTTP services get ports 10001, 10002, 10003, ...
- */
-export const HTTP_PORT_BASE = 10001
 
 /**
  * Base port for local dev servers

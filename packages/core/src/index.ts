@@ -27,5 +27,8 @@ export * from './utils/kubernetes'
 // Docker utilities
 export * from './docker'
 
+// Kubernetes cluster inspection
+export * from './k8s'
+
 // Dev mode
 export * from './dev'

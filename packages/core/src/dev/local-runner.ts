@@ -93,11 +93,10 @@ export function runDevServer(
   }
 
   // Merge environment variables
-  // Priority: devConfig.env > passed env > process.env
+  // Priority: passed env (already includes dev.env overrides) > process.env
   const processEnv: Record<string, string> = {
     ...process.env as Record<string, string>,
     ...env,
-    ...devConfig.env,
     PORT: String(localPort),
   }
 

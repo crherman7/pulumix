@@ -1,6 +1,6 @@
 {
   "name": "@pulumix/cli",
-  "version": "0.7.0",
+  "version": "0.10.0",
   "description": "CLI for Pulumix deployment orchestration",
   "license": "MIT",
   "repository": {

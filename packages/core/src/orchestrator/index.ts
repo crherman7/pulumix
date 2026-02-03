@@ -80,6 +80,16 @@ export interface OrchestratorResult {
 }
 
 /**
+ * Preview result
+ */
+export interface PreviewResult {
+  readonly success: boolean
+  readonly stack: string
+  readonly changeSummary: Record<string, number>
+  readonly duration: number
+}
+
+/**
  * Default backend configuration - local file-based in dist/
  */
 const DEFAULT_BACKEND: BackendConfig = {
@@ -107,9 +117,10 @@ const resolveBackendUrl = (
   switch (backend.type) {
     case 'file': {
       const backendPath = backend.path ?? 'dist/'
-      const absolutePath = path.isAbsolute(backendPath)
+      const base = path.isAbsolute(backendPath)
         ? backendPath
         : path.join(rootPath, backendPath)
+      const absolutePath = path.join(base, stackName)
       return `file://${absolutePath}`
     }
 
@@ -139,8 +150,8 @@ const resolveBackendUrl = (
     }
 
     default: {
-      // Fallback to file backend
-      const defaultPath = path.join(rootPath, 'dist/')
+      // Fallback to file backend (stack-scoped)
+      const defaultPath = path.join(rootPath, 'dist/', stackName)
       return `file://${defaultPath}`
     }
   }
@@ -163,13 +174,13 @@ const resolveWorkDir = (
 
   if (backend.type === 'file') {
     const backendPath = backend.path ?? 'dist/'
-    return path.isAbsolute(backendPath)
+    const base = path.isAbsolute(backendPath)
       ? backendPath
       : path.join(rootPath, backendPath)
+    return path.join(base, stackName)
   }
 
-  // For cloud backends, use dist/ for local workspace files
-  return path.join(rootPath, 'dist/')
+  return path.join(rootPath, 'dist/', stackName)
 }
 
 // ============================================================================
@@ -782,6 +793,266 @@ export class Orchestrator {
   }
 
   /**
+   * Shared setup for deploy and preview: config, discovery, deps, hooks, builds
+   */
+  private async prepareDeployment(
+    config: OrchestratorConfig,
+    liftEither: <R>(val: Either<DeployError, R>) => PromiseLike<R>,
+    throwE: (error: DeployError) => never
+  ): Promise<{
+    sorted: readonly DiscoveredService[]
+    builtImages: Record<string, string>
+    globalConfig: Record<string, unknown>
+    rootConfig: ProjectConfig
+    hooks: ReturnType<typeof getHooksForStack>
+    backendUrl: string
+    workDir: string
+    projectName: string
+    program: () => Promise<Record<string, unknown>>
+    outputs: Record<string, Record<string, unknown>>
+  }> {
+    // Phase 1: Load and validate root config
+    this.eventEmitter.emitPhaseStart('configuration')
+    const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
+    const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
+    const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
+    const stacks = rootConfig.stacks ?? {}
+    const globalConfig = (stacks[config.stackName] as Record<string, unknown>) ?? {}
+    this.eventEmitter.emitPhaseComplete('configuration')
+
+    // Phase 2: Discover services
+    this.eventEmitter.emitPhaseStart('discovery')
+
+    const localServices = await liftEither(await discoverServices(config.rootPath))
+
+    const allowlist = rootConfig.services?.allowed ?? []
+    const publishedServices = await liftEither(await discoverPublishedServices(config.rootPath, allowlist))
+
+    const localServiceNames = new Set(localServices.map(s => s.name))
+    const mergedServices = [
+      ...localServices,
+      ...publishedServices.filter(s => !localServiceNames.has(s.name))
+    ]
+
+    const services = filterServices(mergedServices, config.servicesToDeploy)
+
+    for (let i = 0; i < services.length; i++) {
+      const service = services[i]
+      const isLast = i === services.length - 1
+      const prefix = isLast ? '└─' : '├─'
+      const source = localServiceNames.has(service.name) ? 'local' : 'published'
+      this.eventEmitter.emitLog('info', `${prefix} ${service.name} (${source})`, undefined, 'Discovery')
+    }
+    this.eventEmitter.emitPhaseComplete('discovery')
+
+    // Phase 3: Sort by dependencies
+    this.eventEmitter.emitPhaseStart('dependency-analysis')
+    const sorted = sortByDependencies(services)
+
+    for (let i = 0; i < sorted.length; i++) {
+      const service = sorted[i]
+      const isLast = i === sorted.length - 1
+      const prefix = isLast ? '└─' : '├─'
+      const deps = service.dependencies.length > 0
+        ? ` (requires: ${service.dependencies.join(', ')})`
+        : ''
+      this.eventEmitter.emitLog('info', `${prefix} ${service.name}${deps}`, undefined, 'DependencyGraph')
+    }
+    this.eventEmitter.emitPhaseComplete('dependency-analysis')
+
+    // Get registry config
+    const hostRegistry = getConfigValue<string>(globalConfig, 'hostRegistry').orDefault('localhost:5001')
+    const clusterRegistry = getConfigValue<string>(globalConfig, 'clusterRegistry').orDefault(hostRegistry)
+
+    const platformConfig = getConfigValue<string | string[]>(globalConfig, 'platform').extract()
+    const platforms = platformConfig
+      ? (Array.isArray(platformConfig) ? platformConfig : [platformConfig])
+      : undefined
+
+    // Get hooks for this stack
+    const hooks = getHooksForStack(rootConfig.hooks, config.stackName)
+
+    // Phase 4: Bootstrap - run pre-build hooks
+    const servicesToBuild = sorted.filter(s => s.hasDockerfile)
+    const preBuildHooks = hooks.filter(h => h.stage === 'pre-build')
+
+    if (preBuildHooks.length > 0) {
+      this.eventEmitter.emitPhaseStart('bootstrap')
+
+      const hookResult = await executeHooksForStage('pre-build', hooks, config.rootPath, this.eventEmitter)
+
+      if (hookResult.isLeft()) {
+        this.eventEmitter.emitPhaseComplete('bootstrap', false)
+        throw throwE(hookResult.extract() as DeployError)
+      }
+
+      this.eventEmitter.emitPhaseComplete('bootstrap')
+    }
+
+    // Phase 5: Build Docker images using docker buildx bake
+    const builtImages: Record<string, string> = {}
+
+    if (servicesToBuild.length > 0) {
+      this.eventEmitter.emitPhaseStart('image-build')
+
+      const preparedBuilds = await Promise.all(
+        servicesToBuild.map(service => prepareBuild(service, hostRegistry, config.rootPath))
+      )
+
+      const cachedBuilds = preparedBuilds.filter(b => b.cached)
+      const uncachedBuilds = preparedBuilds.filter(b => !b.cached)
+
+      for (const build of cachedBuilds) {
+        this.eventEmitter.emitTaskStart(build.service.name, build.service.name, 'image-build', build.contentHash)
+        this.eventEmitter.emitTaskUpdate(build.service.name, `unchanged (${build.contentHash})`)
+
+        const imageWithoutRegistry = (build.imageRef || build.imageTag).replace(`${hostRegistry}/`, '')
+        builtImages[build.service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
+
+        this.eventEmitter.emitTaskComplete(build.service.name, true, true, build.contentHash)
+      }
+
+      if (uncachedBuilds.length > 0) {
+        for (const build of uncachedBuilds) {
+          this.eventEmitter.emitTaskStart(build.service.name, build.service.name, 'image-build', build.contentHash)
+          this.eventEmitter.emitTaskUpdate(build.service.name, 'building')
+        }
+
+        const bakeServices: BakeServiceConfig[] = uncachedBuilds.map(build => ({
+          name: build.service.name,
+          contextPath: build.contextPath,
+          dockerfile: build.dockerfile,
+          tag: build.imageTag,
+          contentHash: build.contentHash,
+          platforms,
+        }))
+
+        const bakeConfig = generateBakeConfig(bakeServices)
+        const bakeFilePath = path.join(config.rootPath, 'dist', 'docker-bake.json')
+
+        if (!fs.existsSync(path.dirname(bakeFilePath))) {
+          fs.mkdirSync(path.dirname(bakeFilePath), { recursive: true })
+        }
+
+        fs.writeFileSync(bakeFilePath, JSON.stringify(bakeConfig, null, 2))
+
+        const lastStepShown = new Map<string, string>()
+        const completedTargets = new Set<string>()
+        const buildHashMap = new Map(uncachedBuilds.map(b => [b.service.name, b.contentHash]))
+
+        const bakeResult = await runBake(
+          bakeFilePath,
+          bakeServices,
+          (progress) => {
+            if (!progress.target || progress.target.startsWith('_')) return
+
+            const isExportStep = progress.message.includes('exporting')
+
+            if (progress.done && isExportStep) {
+              completedTargets.add(progress.target)
+              const contentHash = buildHashMap.get(progress.target)
+              this.eventEmitter.emitTaskComplete(progress.target, !progress.error, false, contentHash)
+              return
+            }
+
+            let message = progress.message
+            if (progress.step) {
+              message = `[${progress.step.current}/${progress.step.total}] ${progress.message}`
+            }
+
+            const lastShown = lastStepShown.get(progress.target)
+            if (lastShown === message) return
+            lastStepShown.set(progress.target, message)
+
+            this.eventEmitter.emitTaskUpdate(progress.target, message)
+          }
+        )
+
+        if (bakeResult.isLeft()) {
+          const error = bakeResult.extract() as DeployError
+          for (const build of uncachedBuilds) {
+            if (!completedTargets.has(build.service.name)) {
+              this.eventEmitter.emitTaskComplete(build.service.name, false, false, build.contentHash)
+            }
+          }
+          this.eventEmitter.emitLog('error', error.message, undefined, 'Build')
+          this.eventEmitter.emitPhaseComplete('image-build', false)
+          throw error
+        }
+
+        const imageRefs = bakeResult.unsafeCoerce()
+        for (const build of uncachedBuilds) {
+          const imageRef = imageRefs.get(build.service.name) || build.imageTag
+
+          const imageWithoutRegistry = imageRef.replace(`${hostRegistry}/`, '')
+          builtImages[build.service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
+
+          if (!completedTargets.has(build.service.name)) {
+            this.eventEmitter.emitTaskComplete(build.service.name, true, false, build.contentHash)
+          }
+        }
+      }
+
+      this.eventEmitter.emitPhaseComplete('image-build')
+    }
+
+    // Run post-build hooks
+    const postBuildHooks = hooks.filter(h => h.stage === 'post-build')
+    if (postBuildHooks.length > 0) {
+      const hookResult = await executeHooksForStage('post-build', hooks, config.rootPath, this.eventEmitter)
+      if (hookResult.isLeft()) {
+        throw throwE(hookResult.extract() as DeployError)
+      }
+    }
+
+    // Build Pulumi program function and workspace config
+    const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
+    const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
+    if (!fs.existsSync(workDir)) {
+      fs.mkdirSync(workDir, { recursive: true })
+    }
+
+    const projectName = rootConfig.name ?? 'pulumix-project'
+
+    const outputs: Record<string, Record<string, unknown>> = {}
+
+    const program = async (): Promise<Record<string, unknown>> => {
+      for (const service of sorted) {
+        const resolved = resolveStackConfig(service, config.stackName)
+
+        const ctx: ServiceContext = {
+          stackName: config.stackName,
+          serviceName: service.name,
+          metadata: service.metadata,
+          observability: service.observability,
+          security: service.security,
+          config: resolved.stackConfig,
+          globalConfig,
+          dependencies: outputs,
+          image: builtImages[service.name]
+        }
+
+        const deployFnResult = await loadDeployFunction(service)
+        if (deployFnResult.isLeft()) {
+          throw deployFnResult.extract()
+        }
+
+        const deployFn = deployFnResult.unsafeCoerce()
+        const result = await deployFn(ctx)
+
+        if (result?.outputs) {
+          outputs[service.name] = result.outputs
+        }
+      }
+
+      return outputs
+    }
+
+    return { sorted, builtImages, globalConfig, rootConfig, hooks, backendUrl, workDir, projectName, program, outputs }
+  }
+
+  /**
    * Deploy all services
    */
   deploy(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
@@ -791,225 +1062,9 @@ export class Orchestrator {
       // Validate environment
       await liftEither(this.validateEnvironment(config.stackName))
 
-      // Phase 1: Load and validate root config
-      this.eventEmitter.emitPhaseStart('configuration')
-      const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
-      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
-      const stacks = rootConfig.stacks ?? {}
-      const globalConfig = (stacks[config.stackName] as Record<string, unknown>) ?? {}
-      this.eventEmitter.emitPhaseComplete('configuration')
-
-      // Phase 2: Discover services
-      this.eventEmitter.emitPhaseStart('discovery')
-
-      // Discover local services
-      const localServices = await liftEither(await discoverServices(config.rootPath))
-
-      // Discover published services (from node_modules)
-      const allowlist = rootConfig.services?.allowed ?? []
-      const publishedServices = await liftEither(await discoverPublishedServices(config.rootPath, allowlist))
-
-      // Merge services (local overrides published if name conflicts)
-      const localServiceNames = new Set(localServices.map(s => s.name))
-      const mergedServices = [
-        ...localServices,
-        ...publishedServices.filter(s => !localServiceNames.has(s.name))
-      ]
-
-      const services = filterServices(mergedServices, config.servicesToDeploy)
-
-      // Show discovered services in tree format
-      for (let i = 0; i < services.length; i++) {
-        const service = services[i]
-        const isLast = i === services.length - 1
-        const prefix = isLast ? '└─' : '├─'
-        const source = localServiceNames.has(service.name) ? 'local' : 'published'
-        this.eventEmitter.emitLog('info', `${prefix} ${service.name} (${source})`, undefined, 'Discovery')
-      }
-      this.eventEmitter.emitPhaseComplete('discovery')
-
-      // Phase 3: Sort by dependencies
-      this.eventEmitter.emitPhaseStart('dependency-analysis')
-      const sorted = sortByDependencies(services)
-
-      for (let i = 0; i < sorted.length; i++) {
-        const service = sorted[i]
-        const isLast = i === sorted.length - 1
-        const prefix = isLast ? '└─' : '├─'
-        const deps = service.dependencies.length > 0
-          ? ` (requires: ${service.dependencies.join(', ')})`
-          : ''
-        this.eventEmitter.emitLog('info', `${prefix} ${service.name}${deps}`, undefined, 'DependencyGraph')
-      }
-      this.eventEmitter.emitPhaseComplete('dependency-analysis')
-
-      // Get registry config from global config (user provides via hooks env vars or stack config)
-      const hostRegistry = getConfigValue<string>(globalConfig, 'hostRegistry').orDefault('localhost:5001')
-      const clusterRegistry = getConfigValue<string>(globalConfig, 'clusterRegistry').orDefault(hostRegistry)
-
-      // Get platform config for docker buildx bake (e.g., linux/amd64, linux/arm64)
-      const platformConfig = getConfigValue<string | string[]>(globalConfig, 'platform').extract()
-      const platforms = platformConfig
-        ? (Array.isArray(platformConfig) ? platformConfig : [platformConfig])
-        : undefined
-
-      // Get hooks for this stack
-      const hooks = getHooksForStack(rootConfig.hooks, config.stackName)
-
-      // Phase 4: Bootstrap - run pre-build hooks
-      const servicesToBuild = sorted.filter(s => s.hasDockerfile)
-      const preBuildHooks = hooks.filter(h => h.stage === 'pre-build')
-
-      if (preBuildHooks.length > 0) {
-        this.eventEmitter.emitPhaseStart('bootstrap')
-
-        const hookResult = await executeHooksForStage('pre-build', hooks, config.rootPath, this.eventEmitter)
-
-        if (hookResult.isLeft()) {
-          this.eventEmitter.emitPhaseComplete('bootstrap', false)
-          throw throwE(hookResult.extract() as DeployError)
-        }
-
-        this.eventEmitter.emitPhaseComplete('bootstrap')
-      }
-
-      // Phase 5: Build Docker images using docker buildx bake
-      const builtImages: Record<string, string> = {}
-
-      if (servicesToBuild.length > 0) {
-        this.eventEmitter.emitPhaseStart('image-build')
-
-        // Prepare all builds and check cache in parallel
-        const preparedBuilds = await Promise.all(
-          servicesToBuild.map(service => prepareBuild(service, hostRegistry, config.rootPath))
-        )
-
-        // Separate cached and uncached builds
-        const cachedBuilds = preparedBuilds.filter(b => b.cached)
-        const uncachedBuilds = preparedBuilds.filter(b => !b.cached)
-
-        // Handle cached builds - emit immediate completion
-        for (const build of cachedBuilds) {
-          this.eventEmitter.emitTaskStart(build.service.name)
-          this.eventEmitter.emitTaskUpdate(build.service.name, `unchanged (${build.contentHash})`)
-
-          // Replace host registry with cluster registry
-          const imageWithoutRegistry = (build.imageRef || build.imageTag).replace(`${hostRegistry}/`, '')
-          builtImages[build.service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
-
-          this.eventEmitter.emitTaskComplete(build.service.name, true, true, build.contentHash)
-        }
-
-        // Handle uncached builds using docker buildx bake
-        if (uncachedBuilds.length > 0) {
-          // Emit task start for all uncached builds - show "building" status
-          for (const build of uncachedBuilds) {
-            this.eventEmitter.emitTaskStart(build.service.name)
-            this.eventEmitter.emitTaskUpdate(build.service.name, 'building')
-          }
-
-          // Generate bake config
-          const bakeServices: BakeServiceConfig[] = uncachedBuilds.map(build => ({
-            name: build.service.name,
-            contextPath: build.contextPath,
-            dockerfile: build.dockerfile,
-            tag: build.imageTag,
-            contentHash: build.contentHash,
-            platforms,
-          }))
-
-          const bakeConfig = generateBakeConfig(bakeServices)
-          const bakeFilePath = path.join(config.rootPath, 'dist', 'docker-bake.json')
-
-          // Ensure dist directory exists
-          if (!fs.existsSync(path.dirname(bakeFilePath))) {
-            fs.mkdirSync(path.dirname(bakeFilePath), { recursive: true })
-          }
-
-          // Write bake config file
-          fs.writeFileSync(bakeFilePath, JSON.stringify(bakeConfig, null, 2))
-
-          // Track last step shown per service to avoid duplicate updates
-          const lastStepShown = new Map<string, string>()
-          // Track targets that have completed to avoid duplicate completion events
-          const completedTargets = new Set<string>()
-
-          // Run bake with rawjson progress - emit step updates per service
-          const bakeResult = await runBake(
-            bakeFilePath,
-            bakeServices,
-            (progress) => {
-              // Skip internal/global events
-              if (!progress.target || progress.target.startsWith('_')) return
-
-              // Check if this is a final export step completing
-              // Export steps are the last phase of a build (exporting to image, exporting layers, etc.)
-              const isExportStep = progress.message.includes('exporting')
-
-              // If an export step completed, the target build is done
-              if (progress.done && isExportStep) {
-                completedTargets.add(progress.target)
-                this.eventEmitter.emitTaskComplete(progress.target, !progress.error)
-                return
-              }
-
-              // Format step progress message
-              let message = progress.message
-              if (progress.step) {
-                message = `[${progress.step.current}/${progress.step.total}] ${progress.message}`
-              }
-
-              // Skip if this is the same step we already showed
-              const lastShown = lastStepShown.get(progress.target)
-              if (lastShown === message) return
-              lastStepShown.set(progress.target, message)
-
-              // Emit task update with step progress
-              this.eventEmitter.emitTaskUpdate(progress.target, message)
-            }
-          )
-
-          if (bakeResult.isLeft()) {
-            // Build failed - mark uncached builds that haven't completed as failed
-            const error = bakeResult.extract() as DeployError
-            for (const build of uncachedBuilds) {
-              if (!completedTargets.has(build.service.name)) {
-                this.eventEmitter.emitTaskComplete(build.service.name, false)
-              }
-            }
-            this.eventEmitter.emitLog('error', error.message, undefined, 'Build')
-            this.eventEmitter.emitPhaseComplete('image-build', false)
-            throw error
-          }
-
-          // Build succeeded - update builtImages and emit completions for any not already completed
-          const imageRefs = bakeResult.unsafeCoerce()
-          for (const build of uncachedBuilds) {
-            const imageRef = imageRefs.get(build.service.name) || build.imageTag
-
-            // Replace host registry with cluster registry
-            const imageWithoutRegistry = imageRef.replace(`${hostRegistry}/`, '')
-            builtImages[build.service.name] = `${clusterRegistry}/${imageWithoutRegistry}`
-
-            // Only emit completion if not already completed via progress callback
-            if (!completedTargets.has(build.service.name)) {
-              this.eventEmitter.emitTaskComplete(build.service.name, true, false, build.contentHash)
-            }
-          }
-        }
-
-        this.eventEmitter.emitPhaseComplete('image-build')
-      }
-
-      // Run post-build hooks
-      const postBuildHooks = hooks.filter(h => h.stage === 'post-build')
-      if (postBuildHooks.length > 0) {
-        const hookResult = await executeHooksForStage('post-build', hooks, config.rootPath, this.eventEmitter)
-        if (hookResult.isLeft()) {
-          throw throwE(hookResult.extract() as DeployError)
-        }
-      }
+      // Phases 1-5: shared preparation
+      const { sorted, hooks, backendUrl, workDir, projectName, program, outputs } =
+        await this.prepareDeployment(config, liftEither, throwE)
 
       // Run pre-deploy hooks
       const preDeployHooks = hooks.filter(h => h.stage === 'pre-deploy')
@@ -1022,54 +1077,6 @@ export class Orchestrator {
 
       // Phase 6: Run Pulumi deployment
       this.eventEmitter.emitPhaseStart('deployment')
-
-      const outputs: Record<string, Record<string, unknown>> = {}
-
-      // Create Pulumi program that runs all services
-      const program = async (): Promise<Record<string, unknown>> => {
-        for (const service of sorted) {
-          const resolved = resolveStackConfig(service, config.stackName)
-
-          const ctx: ServiceContext = {
-            stackName: config.stackName,
-            serviceName: service.name,
-            metadata: service.metadata,
-            observability: service.observability,
-            security: service.security,
-            config: resolved.stackConfig,
-            globalConfig,
-            dependencies: outputs,
-            image: builtImages[service.name]
-          }
-
-          // Load and execute deploy function
-          const deployFnResult = await loadDeployFunction(service)
-          if (deployFnResult.isLeft()) {
-            throw deployFnResult.extract()
-          }
-
-          const deployFn = deployFnResult.unsafeCoerce()
-          const result = await deployFn(ctx)
-
-          if (result?.outputs) {
-            outputs[service.name] = result.outputs
-          }
-        }
-
-        // Return outputs so they're registered as Pulumi stack outputs
-        return outputs
-      }
-
-      // Resolve backend configuration
-      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
-      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
-
-      // Ensure working directory exists
-      if (!fs.existsSync(workDir)) {
-        fs.mkdirSync(workDir, { recursive: true })
-      }
-
-      const projectName = rootConfig.name ?? 'pulumix-project'
 
       const stack = await LocalWorkspace.createOrSelectStack(
         {
@@ -1131,6 +1138,124 @@ export class Orchestrator {
   }
 
   /**
+   * Preview changes without deploying
+   */
+  preview(config: OrchestratorConfig): EitherAsync<DeployError, PreviewResult> {
+    const startTime = Date.now()
+
+    return EitherAsync(async ({ liftEither, throwE }) => {
+      await liftEither(this.validateEnvironment(config.stackName))
+
+      // Phases 1-5: shared preparation
+      const { backendUrl, workDir, projectName, program } =
+        await this.prepareDeployment(config, liftEither, throwE)
+
+      // Phase 6: Run Pulumi preview
+      this.eventEmitter.emitPhaseStart('deployment')
+
+      const stack = await LocalWorkspace.createOrSelectStack(
+        { stackName: config.stackName, projectName, program },
+        { workDir, projectSettings: { name: projectName, runtime: 'nodejs' as const, backend: { url: backendUrl } } }
+      )
+
+      try {
+        const previewResult = await stack.preview({
+          onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
+        })
+        this.eventEmitter.emitPhaseComplete('deployment')
+
+        return {
+          success: true,
+          stack: config.stackName,
+          changeSummary: previewResult.changeSummary ?? {},
+          duration: Date.now() - startTime
+        }
+      } catch (err) {
+        this.eventEmitter.emitPhaseComplete('deployment', false)
+        const message = err instanceof Error ? err.message : String(err)
+        throw new Error(`Pulumi preview failed: ${message}`)
+      }
+    })
+  }
+
+  /**
+   * Show current stack outputs without deploying
+   */
+  status(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
+    return EitherAsync(async ({ liftEither }) => {
+      await liftEither(this.validateEnvironment(config.stackName))
+
+      const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
+      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
+      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
+
+      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
+      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
+      if (!fs.existsSync(workDir)) {
+        fs.mkdirSync(workDir, { recursive: true })
+      }
+
+      const projectName = rootConfig.name ?? 'pulumix-project'
+
+      const stack = await LocalWorkspace.createOrSelectStack(
+        { stackName: config.stackName, projectName, program: async () => {} },
+        { workDir, projectSettings: { name: projectName, runtime: 'nodejs' as const, backend: { url: backendUrl } } }
+      )
+
+      const stackOutputs = await stack.outputs()
+      const outputs = Object.fromEntries(
+        Object.entries(stackOutputs).map(([k, v]) => [k, v.value])
+      ) as Record<string, Record<string, unknown>>
+
+      return { success: true, stack: config.stackName, servicesDeployed: 0, duration: 0, outputs }
+    })
+  }
+
+  /**
+   * Refresh stack state from cloud resources
+   */
+  refresh(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
+    const startTime = Date.now()
+
+    return EitherAsync(async ({ liftEither }) => {
+      await liftEither(this.validateEnvironment(config.stackName))
+
+      const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
+      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
+      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
+
+      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
+      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
+      if (!fs.existsSync(workDir)) {
+        fs.mkdirSync(workDir, { recursive: true })
+      }
+
+      const projectName = rootConfig.name ?? 'pulumix-project'
+
+      const program = async (): Promise<void> => {}
+
+      const stack = await LocalWorkspace.createOrSelectStack(
+        { stackName: config.stackName, projectName, program },
+        { workDir, projectSettings: { name: projectName, runtime: 'nodejs' as const, backend: { url: backendUrl } } }
+      )
+
+      await stack.refresh({
+        onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
+      })
+
+      return {
+        success: true,
+        stack: config.stackName,
+        servicesDeployed: 0,
+        duration: Date.now() - startTime,
+        outputs: {}
+      }
+    })
+  }
+
+  /**
    * Destroy all services
    */
   destroy(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
@@ -1148,6 +1273,10 @@ export class Orchestrator {
       // Resolve backend configuration
       const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
       const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
+      if (!fs.existsSync(workDir)) {
+        fs.mkdirSync(workDir, { recursive: true })
+      }
 
       const projectName = rootConfig.name ?? 'pulumix-project'
 

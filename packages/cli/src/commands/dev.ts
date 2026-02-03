@@ -1,14 +1,13 @@
 /**
  * Dev command - Run services locally with HMR
  *
- * Deploys dependencies to cluster, sets up port-forwards,
- * and runs specified services locally with hot module replacement.
+ * Sets up port-forwards to cluster dependencies, auto-computes
+ * environment variables, and runs specified services locally.
  */
 
 import chalk from 'chalk'
 import * as path from 'path'
-import { DevOrchestrator, DevOrchestratorResult, formatError } from '@pulumix/core'
-import { createEventBus, createUIShell } from '../ui'
+import { DevOrchestrator, formatError } from '@pulumix/core'
 
 export interface DevCommandOptions {
   readonly path?: string
@@ -34,50 +33,35 @@ export async function devCommand(
   }
 
   console.log('')
-  console.log(chalk.bold('pulumix dev'))
+  console.log(chalk.bold(`pulumix dev ${chalk.cyan(stackName)}`))
   console.log(chalk.dim(rootPath))
   console.log('')
+  console.log(`  Stack:    ${chalk.cyan(stackName)}`)
+  console.log(`  Services: ${chalk.cyan(devServices.join(', '))}`)
+  console.log('')
 
-  // Create event bus and UI shell
-  const uiEventBus = createEventBus()
-  const ui = createUIShell(uiEventBus, { verbose: options.verbose })
+  const devOrchestrator = new DevOrchestrator()
 
-  // Create dev orchestrator with event bridging
-  const { createEventEmitter } = await import('@pulumix/core')
-  const orchestratorEvents = createEventEmitter()
-
-  // Bridge orchestrator events to UI
-  orchestratorEvents.on((event) => {
-    uiEventBus.emit(event)
-  })
-
-  const devOrchestrator = new DevOrchestrator(orchestratorEvents)
-
-  // Setup graceful shutdown
+  // Graceful shutdown
   const cleanup = async () => {
     console.log('')
     console.log(chalk.dim('Shutting down...'))
     await devOrchestrator.stop()
-    ui.cleanup()
     process.exit(0)
   }
 
   process.on('SIGINT', cleanup)
   process.on('SIGTERM', cleanup)
 
-  // Print configuration
-  console.log(chalk.bold('Configuration'))
-  console.log(`  Stack:        ${chalk.cyan(stackName)}`)
-  console.log(`  Dev Services: ${chalk.cyan(devServices.join(', '))}`)
-  console.log('')
-
   // Start dev mode
   const result = await devOrchestrator.dev({
     rootPath,
     stackName,
     devServices,
+    onLog: (message) => {
+      console.log(chalk.dim(`  ${message}`))
+    },
     onOutput: (message) => {
-      // Print dev server output
       console.log(message)
     },
   }).run()
@@ -87,11 +71,10 @@ export async function devCommand(
     console.error('')
     console.error(chalk.red('Dev mode failed:'))
     console.error(formatError(error))
-    ui.cleanup()
     process.exit(1)
   }
 
-  const devResult = result.unsafeCoerce() as DevOrchestratorResult
+  const devResult = result.unsafeCoerce()
 
   // Print summary
   console.log('')
@@ -111,14 +94,6 @@ export async function devCommand(
     console.log(`    ${chalk.green('+')} ${ds.service.name} -> http://localhost:${ds.localPort}`)
   }
   console.log('')
-
-  if (devResult.ingressUrls && devResult.ingressUrls.length > 0) {
-    console.log(chalk.dim('  Ingress URLs (routed to local):'))
-    for (const url of devResult.ingressUrls) {
-      console.log(`    ${chalk.green('+')} ${chalk.cyan(url)}`)
-    }
-    console.log('')
-  }
 
   console.log(chalk.dim('Press Ctrl+C to stop'))
   console.log('')

@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'child_process'
+import * as net from 'net'
 import { createDeploymentError, DeployError } from '../types/errors'
 import { Either, Left, Right } from 'purify-ts/Either'
 import { PortForwardMapping, PortForwardHandle } from './types'
@@ -48,7 +49,6 @@ export async function checkKubectl(): Promise<Either<DeployError, true>> {
  */
 export function checkPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const net = require('net')
     const server = net.createServer()
 
     server.once('error', () => {
@@ -65,48 +65,22 @@ export function checkPortAvailable(port: number): Promise<boolean> {
 }
 
 /**
- * Wait for a port to become available (with timeout)
+ * Find an available local port starting from the given port.
+ * Auto-increments if the port is in use.
  */
-export async function waitForPort(
-  port: number,
-  timeoutMs: number = 10000
-): Promise<boolean> {
-  const startTime = Date.now()
-  const checkInterval = 100
+export async function findAvailablePort(startPort: number): Promise<number> {
+  let port = startPort
+  const maxAttempts = 100
 
-  while (Date.now() - startTime < timeoutMs) {
-    const net = require('net')
-    const available = await new Promise<boolean>((resolve) => {
-      const socket = new net.Socket()
-
-      socket.setTimeout(500)
-
-      socket.on('connect', () => {
-        socket.destroy()
-        resolve(true)
-      })
-
-      socket.on('error', () => {
-        socket.destroy()
-        resolve(false)
-      })
-
-      socket.on('timeout', () => {
-        socket.destroy()
-        resolve(false)
-      })
-
-      socket.connect(port, '127.0.0.1')
-    })
-
-    if (available) {
-      return true
+  for (let i = 0; i < maxAttempts; i++) {
+    if (await checkPortAvailable(port)) {
+      return port
     }
-
-    await new Promise((resolve) => setTimeout(resolve, checkInterval))
+    port++
   }
 
-  return false
+  // Fall back to the original port and let the caller handle the error
+  return startPort
 }
 
 /**
@@ -164,11 +138,11 @@ export async function startPortForward(
       }
     })
 
-    proc.stderr?.on('data', (data) => {
+    proc.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString()
     })
 
-    proc.stdout?.on('data', (data) => {
+    proc.stdout?.on('data', (data: Buffer) => {
       const output = data.toString()
       // kubectl port-forward outputs "Forwarding from 127.0.0.1:PORT -> PORT" when ready
       if (output.includes('Forwarding from') && !started) {
@@ -197,7 +171,7 @@ export async function startPortForward(
 }
 
 /**
- * Start multiple port-forwards in parallel
+ * Start multiple port-forwards sequentially
  */
 export async function startPortForwards(
   mappings: PortForwardMapping[],

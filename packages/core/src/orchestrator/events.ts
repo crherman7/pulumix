@@ -174,7 +174,7 @@ export class OrchestratorEventEmitter {
   /**
    * Emit task start event
    */
-  emitTaskStart(taskIdOrName: string, taskName?: string, phase?: string): void {
+  emitTaskStart(taskIdOrName: string, taskName?: string, phase?: string, contentHash?: string): void {
     // Support both old signature (taskName only) and new (taskId, taskName)
     const taskId = taskIdOrName
     const displayName = taskName || taskIdOrName
@@ -189,7 +189,8 @@ export class OrchestratorEventEmitter {
       taskId,
       taskName: displayName,
       phase: eventPhase,
-      timestamp: now
+      timestamp: now,
+      contentHash
     })
   }
 

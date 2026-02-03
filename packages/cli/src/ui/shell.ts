@@ -69,6 +69,16 @@ const isCompleteStatus = (status: string): boolean => {
 }
 
 // ============================================================================
+// Column Formatting Helpers
+// ============================================================================
+
+// Fit string to fixed column width (pad or truncate)
+const fitToWidth = (str: string, width: number): string => {
+  if (str.length <= width) return str.padEnd(width)
+  return str.slice(0, width - 2) + '..'
+}
+
+// ============================================================================
 // Build Task Spinner (inline, simple approach)
 // ============================================================================
 
@@ -79,6 +89,7 @@ interface BuildTask {
   phase: string
   startTime: number
   spinnerFrame: number
+  contentHash?: string
 }
 
 interface CompletedTask {
@@ -94,6 +105,10 @@ const createBuildTaskSpinner = () => {
   const completedTasks: CompletedTask[] = []
   let interval: NodeJS.Timeout | null = null
   let stopped = false
+
+  // Track max column widths (grow only, never shrink)
+  let maxNameWidth = 0
+  let maxHashWidth = 0
 
   const updater = logUpdate({
     height: process.stdout.rows ?? 24,
@@ -120,13 +135,17 @@ const createBuildTaskSpinner = () => {
 
   const formatCompletedLine = (task: CompletedTask): string => {
     const icon = task.success ? chalk.green('+') : chalk.red('-')
+    const name = fitToWidth(task.label, maxNameWidth)
+    const hash = task.contentHash
+      ? chalk.dim(task.contentHash.padEnd(maxHashWidth))
+      : ''.padEnd(maxHashWidth)
     const statusText = task.skipped
       ? chalk.bold.dim('unchanged')
       : task.success
         ? chalk.bold.green('created')
         : chalk.bold.red('failed')
-    const hashText = task.contentHash ? ` ${chalk.dim(`(${task.contentHash})`)}` : ''
-    return `  ${icon} ${task.label}${hashText} ${statusText} ${chalk.dim(`(${(task.duration / 1000).toFixed(1)}s)`)}`
+    const time = chalk.dim(`(${(task.duration / 1000).toFixed(1)}s)`)
+    return `  ${icon} ${name} ${hash} ${statusText} ${time}`
   }
 
   const render = (): void => {
@@ -144,8 +163,12 @@ const createBuildTaskSpinner = () => {
     for (const task of tasks.values()) {
       const frame = getSpinnerFrame(task.spinnerFrame)
       const elapsed = ((Date.now() - task.startTime) / 1000).toFixed(1)
-      const statusText = task.status ? ` ${chalk.dim(truncate(task.status))}` : ''
-      lines.push(`  ${chalk.green(frame)} ${task.label}${statusText} ${chalk.dim(`(${elapsed}s)`)}`)
+      const name = fitToWidth(task.label, maxNameWidth)
+      const hash = task.contentHash
+        ? chalk.dim(task.contentHash.padEnd(maxHashWidth))
+        : ''.padEnd(maxHashWidth)
+      const status = task.status ? fitToWidth(truncate(task.status), 20) : ''.padEnd(20)
+      lines.push(`  ${chalk.green(frame)} ${name} ${hash} ${chalk.dim(status)} ${chalk.dim(`(${elapsed}s)`)}`)
       task.spinnerFrame++
     }
 
@@ -169,8 +192,14 @@ const createBuildTaskSpinner = () => {
   }
 
   return {
-    start: (id: string, label: string, phase: string): void => {
-      tasks.set(id, { id, label, status: '', phase, startTime: Date.now(), spinnerFrame: 0 })
+    start: (id: string, label: string, phase: string, contentHash?: string): void => {
+      // Update max column widths
+      maxNameWidth = Math.max(maxNameWidth, label.length)
+      if (contentHash) {
+        maxHashWidth = Math.max(maxHashWidth, contentHash.length)
+      }
+
+      tasks.set(id, { id, label, status: '', phase, startTime: Date.now(), spinnerFrame: 0, contentHash })
 
       if (!interval) {
         stopped = false
@@ -398,7 +427,7 @@ export class UIShell {
 
         // Handle Build/Bootstrap with spinners
         if ((event.phase === 'Build' || event.phase === 'Bootstrap') && this.isDynamic()) {
-          this.buildSpinner.start(event.taskId, event.taskName, event.phase)
+          this.buildSpinner.start(event.taskId, event.taskName, event.phase, event.contentHash)
         }
       })
     )
@@ -420,12 +449,12 @@ export class UIShell {
         if ((phase === 'Build' || phase === 'Bootstrap') && this.isDynamic()) {
           this.buildSpinner.complete(event.taskId, event.status === 'success', skipped, event.contentHash)
         } else if (phase === 'Build' || phase === 'Bootstrap') {
-          // Static mode - just print completion (same format as Deploy)
+          // Static mode - simple output (no dynamic width calculation)
           const icon = event.status === 'success' ? chalk.green('+') : chalk.red('-')
-          const duration = event.duration ? ` ${chalk.dim(`(${(event.duration / 1000).toFixed(1)}s)`)}` : ''
+          const hash = event.contentHash ? chalk.dim(event.contentHash) + ' ' : ''
           const statusText = skipped ? chalk.bold.dim('unchanged') : chalk.bold.green('created')
-          const hashText = event.contentHash ? ` ${chalk.dim(`(${event.contentHash})`)}` : ''
-          console.log(`  ${icon} ${event.taskName}${hashText} ${statusText}${duration}`)
+          const time = event.duration ? chalk.dim(`(${(event.duration / 1000).toFixed(1)}s)`) : ''
+          console.log(`  ${icon} ${event.taskName} ${hash}${statusText} ${time}`)
         }
 
         this.taskPhases.delete(event.taskId)

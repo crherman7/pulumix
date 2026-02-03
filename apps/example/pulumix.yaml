@@ -1,28 +1,20 @@
-# Pulumix Project Configuration
-
 name: hello-world
 
 backend:
   type: file
   path: dist/
 
-# Security: allowlist for published services
-services:
-  allowed:
-    - "@platform/*"
-    - "@hello-world/*"
-
 stacks:
   local:
     namespace: hello-world
-    # Registry config for image tagging
+    kubeContext: k3d-hello-world
     hostRegistry: localhost:5001
     clusterRegistry: hello-world-registry:5000
 
   production:
     namespace: hello-world-prod
+    kubeContext: production-cluster
 
-# Lifecycle hooks
 hooks:
   local:
     - stage: pre-build

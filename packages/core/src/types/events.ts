@@ -70,6 +70,7 @@ export interface TaskStartEvent {
   readonly taskName: string
   readonly phase: PhaseName
   readonly timestamp: number
+  readonly contentHash?: string
 }
 
 /**

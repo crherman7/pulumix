@@ -15,6 +15,9 @@ import { validateCommand } from './commands/validate'
 import { inspectCommand } from './commands/inspect'
 import { graphCommand } from './commands/graph'
 import { devCommand } from './commands/dev'
+import { statusCommand } from './commands/status'
+import { refreshCommand } from './commands/refresh'
+import { previewCommand } from './commands/preview'
 import chalk from 'chalk'
 
 /**
@@ -277,6 +280,34 @@ function main(): void {
     .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
     .option('--json', 'Output as JSON', false)
     .action(inspectCommand)
+
+  // Status command
+  program
+    .command('status')
+    .description('Show current stack outputs')
+    .argument('<stack>', 'Stack name')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('--json', 'Output as JSON', false)
+    .action(statusCommand)
+
+  // Preview command
+  program
+    .command('preview')
+    .description('Preview changes without deploying')
+    .argument('<stack>', 'Stack name')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('-s, --services <services>', 'Comma-separated list of services to preview')
+    .option('-v, --verbose', 'Enable verbose logging', false)
+    .action(previewCommand)
+
+  // Refresh command
+  program
+    .command('refresh')
+    .description('Refresh stack state from cloud resources')
+    .argument('<stack>', 'Stack name')
+    .option('-p, --path <path>', 'Root path for deployment files', process.cwd())
+    .option('-v, --verbose', 'Enable verbose logging', false)
+    .action(refreshCommand)
 
   // Graph command
   program

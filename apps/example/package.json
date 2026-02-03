@@ -1,21 +1,17 @@
 {
   "name": "@pulumix/example",
   "version": "1.0.0",
-  "description": "Pulumix example project",
   "private": true,
+  "description": "Pulumix example project",
   "scripts": {
     "deploy": "pulumix deploy",
     "dev": "pulumix dev",
     "destroy": "pulumix destroy"
   },
-  "keywords": [
-    "pulumix",
-    "example",
-    "kubernetes"
-  ],
   "dependencies": {
     "@pulumix/cli": "workspace:*",
     "@pulumix/core": "workspace:*",
+    "@pulumix/k8s-platform": "workspace:*",
     "@pulumi/kubernetes": "^4.18.0"
   },
   "devDependencies": {

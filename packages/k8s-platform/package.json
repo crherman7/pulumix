@@ -1,12 +1,12 @@
 {
-  "name": "@pulumix/core",
+  "name": "@pulumix/k8s-platform",
   "version": "0.10.0",
-  "description": "Core types, managers, and orchestrator for Pulumix",
+  "description": "Kubernetes compute primitives for Pulumix services",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/crherman7/pulumix.git",
-    "directory": "packages/core"
+    "directory": "packages/k8s-platform"
   },
   "homepage": "https://github.com/crherman7/pulumix",
   "bugs": {
@@ -19,14 +19,10 @@
       "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
       "import": "./dist/index.mjs"
-    },
-    "./schema": {
-      "default": "./src/schemas/service-manifest.schema.json"
     }
   },
   "files": [
-    "dist",
-    "src/schemas"
+    "dist"
   ],
   "scripts": {
     "build": "tsc --build",
@@ -36,19 +32,15 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@balena/dockerignore": "^1.0.2",
-    "@pulumi/pulumi": "^3.142.0",
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "dockerfile-ast": "^0.7.1",
-    "fast-glob": "^3.3.3",
-    "jiti": "^2.6.1",
-    "purify-ts": "^2.1.0",
-    "yaml": "^2.6.1",
-    "@kubernetes/client-node": "^1.0.0"
+    "@pulumix/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@pulumi/pulumi": "^3.0.0",
+    "@pulumi/kubernetes": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@pulumi/pulumi": "^3.142.0",
+    "@pulumi/kubernetes": "^4.0.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

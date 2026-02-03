@@ -1,8 +1,9 @@
 /**
  * DevOrchestrator - Local development with HMR
  *
- * Runs specified services locally with HMR while deploying
- * dependencies to the cluster.
+ * Runs specified services locally while port-forwarding dependencies
+ * from the cluster. Auto-discovers dependency ports and auto-computes
+ * environment variables from the deployment spec.
  */
 
 import { EitherAsync } from 'purify-ts/EitherAsync'
@@ -15,45 +16,26 @@ import {
 } from '../types/errors'
 import { DiscoveredService } from '../types/service'
 import { discoverServices } from '../orchestrator'
-import { OrchestratorEventEmitter, createEventEmitter } from '../orchestrator/events'
+import { createK8sClients, listNamespaceServices, resolveDeploymentEnv } from '../k8s'
+import type { ClusterServiceInfo } from '../k8s'
+import { computeDevEnvVars, buildDependencyLookups } from './env-compute'
 import {
   DevConfig,
-  DevExposeConfig,
   DevOrchestratorConfig,
   DevOrchestratorResult,
   LocalDevService,
   PortForwardMapping,
   PortForwardHandle,
   DevServerHandle,
-  ServiceSwapHandle,
   DEV_SERVER_PORT_BASE,
-  HTTP_PORT_BASE,
-  STANDARD_PORTS,
 } from './types'
-import { checkKubectl, startPortForwards, stopPortForwards } from './port-forward'
+import { checkKubectl, startPortForwards, stopPortForwards, findAvailablePort } from './port-forward'
 import { runDevServers, stopDevServers } from './local-runner'
-import { buildAllDevEnvironments, getServiceProtocol, isDatabaseService, serviceToEnvVar } from './env-builder'
-import {
-  swapServiceToLocal,
-  restoreFromStaleState,
-  loadDevState,
-} from './service-swap'
 
 export * from './types'
 export * from './port-forward'
 export * from './local-runner'
-export * from './env-builder'
-export * from './service-swap'
-
-/**
- * Validation error for dev config
- */
-export class DevConfigValidationError extends Error {
-  constructor(serviceName: string, field: string, message: string) {
-    super(`Invalid dev config for '${serviceName}': ${field} ${message}`)
-    this.name = 'DevConfigValidationError'
-  }
-}
+export * from './env-compute'
 
 /**
  * Extract and validate dev config from service's raw config
@@ -62,138 +44,34 @@ function getDevConfig(service: DiscoveredService): DevConfig | undefined {
   const dev = service.rawConfig.dev as Record<string, unknown> | undefined
   if (!dev) return undefined
 
-  // Validate command if provided (now optional)
-  let command: string | undefined
-  if (dev.command !== undefined) {
-    if (typeof dev.command !== 'string' || dev.command.trim() === '') {
-      throw new DevConfigValidationError(
-        service.name,
-        'command',
-        'must be a non-empty string'
-      )
-    }
-    command = dev.command
+  if (dev.command === undefined || typeof dev.command !== 'string' || dev.command.trim() === '') {
+    return undefined
   }
 
   // Validate port if provided
-  let port: number | undefined
   if (dev.port !== undefined) {
-    if (typeof dev.port !== 'number' || !Number.isInteger(dev.port)) {
-      throw new DevConfigValidationError(
-        service.name,
-        'port',
-        'must be an integer'
-      )
+    if (typeof dev.port !== 'number' || !Number.isInteger(dev.port) || dev.port < 1 || dev.port > 65535) {
+      throw new Error(`Invalid dev config for '${service.name}': port must be an integer between 1 and 65535`)
     }
-    if (dev.port < 1 || dev.port > 65535) {
-      throw new DevConfigValidationError(
-        service.name,
-        'port',
-        'must be between 1 and 65535'
-      )
-    }
-    port = dev.port
-  }
-
-  // Validate cwd if provided
-  if (dev.cwd !== undefined && typeof dev.cwd !== 'string') {
-    throw new DevConfigValidationError(
-      service.name,
-      'cwd',
-      'must be a string'
-    )
   }
 
   // Validate env if provided
   if (dev.env !== undefined) {
     if (typeof dev.env !== 'object' || dev.env === null || Array.isArray(dev.env)) {
-      throw new DevConfigValidationError(
-        service.name,
-        'env',
-        'must be an object'
-      )
-    }
-    for (const [key, value] of Object.entries(dev.env)) {
-      if (typeof value !== 'string') {
-        throw new DevConfigValidationError(
-          service.name,
-          `env.${key}`,
-          'must be a string'
-        )
-      }
+      throw new Error(`Invalid dev config for '${service.name}': env must be an object`)
     }
   }
 
-  // Validate expose if provided
-  let expose: DevExposeConfig | undefined
-  if (dev.expose !== undefined) {
-    const exp = dev.expose as Record<string, unknown>
-
-    // Validate port (required for expose)
-    if (typeof exp.port !== 'number' || !Number.isInteger(exp.port)) {
-      throw new DevConfigValidationError(
-        service.name,
-        'expose.port',
-        'must be an integer'
-      )
-    }
-    if (exp.port < 1 || exp.port > 65535) {
-      throw new DevConfigValidationError(
-        service.name,
-        'expose.port',
-        'must be between 1 and 65535'
-      )
-    }
-
-    // Validate protocol if provided
-    if (exp.protocol !== undefined && typeof exp.protocol !== 'string') {
-      throw new DevConfigValidationError(
-        service.name,
-        'expose.protocol',
-        'must be a string'
-      )
-    }
-
-    // Validate envVar if provided
-    if (exp.envVar !== undefined) {
-      if (typeof exp.envVar !== 'string') {
-        throw new DevConfigValidationError(
-          service.name,
-          'expose.envVar',
-          'must be a string'
-        )
-      }
-      if (!/^[A-Z][A-Z0-9_]*$/.test(exp.envVar)) {
-        throw new DevConfigValidationError(
-          service.name,
-          'expose.envVar',
-          'must be uppercase with underscores (e.g., DATABASE_URL)'
-        )
-      }
-    }
-
-    expose = {
-      port: exp.port,
-      protocol: exp.protocol as string | undefined,
-      envVar: exp.envVar as string | undefined,
-    }
-  }
-
-  // Must have at least command or expose
-  if (!command && !expose) {
-    throw new DevConfigValidationError(
-      service.name,
-      'dev',
-      'must have either command or expose'
-    )
+  // Validate cwd if provided
+  if (dev.cwd !== undefined && typeof dev.cwd !== 'string') {
+    throw new Error(`Invalid dev config for '${service.name}': cwd must be a string`)
   }
 
   return {
-    command,
-    port,
+    command: dev.command,
+    port: dev.port as number | undefined,
     env: dev.env as Record<string, string> | undefined,
     cwd: dev.cwd as string | undefined,
-    expose,
   }
 }
 
@@ -227,76 +105,51 @@ function computeTransitiveDependencies(
 }
 
 /**
- * Check if a service has running pods (indicated by observability config)
- * Infrastructure-only services (like provider, ingress) don't have observability
+ * Read namespace and kubeContext from root config
  */
-function hasRunningPods(service: DiscoveredService): boolean {
-  const observability = service.rawConfig.observability as Record<string, unknown> | undefined
-  return observability?.health !== undefined
+function readRootConfig(rootPath: string, stackName: string): { namespace: string; kubeContext?: string } {
+  try {
+    const rootConfigPath = `${rootPath}/pulumix.yaml`
+    const content = fs.readFileSync(rootConfigPath, 'utf-8')
+    const config = yaml.parse(content) as Record<string, unknown>
+    const stacks = config.stacks as Record<string, Record<string, unknown>> | undefined
+    const stackConfig = stacks?.[stackName]
+
+    return {
+      namespace: (stackConfig?.namespace as string) ?? stackName,
+      kubeContext: stackConfig?.kubeContext as string | undefined,
+    }
+  } catch {
+    return { namespace: stackName }
+  }
 }
 
 /**
- * Compute port-forward mappings for cluster services
- * Only includes services that have running pods (not infrastructure-only)
- * Uses dev.expose config if available, otherwise falls back to inference
+ * Build port-forward mappings from cluster service info.
+ * Uses real ports from the cluster instead of inference.
  */
-function computePortForwardMappings(
-  clusterServices: DiscoveredService[],
+async function buildPortForwardMappings(
+  clusterServices: ClusterServiceInfo[],
+  dependencyNames: string[],
   namespace: string
-): PortForwardMapping[] {
+): Promise<PortForwardMapping[]> {
   const mappings: PortForwardMapping[] = []
-  let httpPortCounter = HTTP_PORT_BASE
+  const clusterMap = new Map(clusterServices.map(s => [s.name, s]))
 
-  for (const service of clusterServices) {
-    // Skip infrastructure-only services (no running pods)
-    if (!hasRunningPods(service)) {
-      continue
-    }
+  for (const depName of dependencyNames) {
+    const svc = clusterMap.get(depName)
+    if (!svc || svc.ports.length === 0) continue
 
-    // Try to get expose config from service's dev section
-    const devConfig = getDevConfig(service)
-    const expose = devConfig?.expose
+    // Use the first port of the service
+    const port = svc.ports[0]
+    const localPort = await findAvailablePort(port.port)
 
-    if (expose) {
-      // Use explicit expose configuration
-      mappings.push({
-        serviceName: service.name,
-        namespace,
-        remotePort: expose.port,
-        localPort: expose.port, // Use same port locally for simplicity
-        envVar: expose.envVar || serviceToEnvVar(service.name),
-        protocol: expose.protocol || 'http',
-      })
-    } else {
-      // Fall back to inference based on service name
-      const serviceName = service.name.toLowerCase()
-      const protocol = getServiceProtocol(serviceName)
-
-      if (isDatabaseService(serviceName)) {
-        const standardPort = Object.entries(STANDARD_PORTS).find(
-          ([key]) => serviceName.includes(key)
-        )?.[1] ?? 80
-
-        mappings.push({
-          serviceName: service.name,
-          namespace,
-          remotePort: standardPort,
-          localPort: standardPort,
-          envVar: serviceToEnvVar(service.name),
-          protocol,
-        })
-      } else {
-        // HTTP services get auto-assigned ports starting at HTTP_PORT_BASE
-        mappings.push({
-          serviceName: service.name,
-          namespace,
-          remotePort: 80, // All HTTP services expose port 80
-          localPort: httpPortCounter++,
-          envVar: serviceToEnvVar(service.name),
-          protocol: 'http',
-        })
-      }
-    }
+    mappings.push({
+      serviceName: depName,
+      namespace,
+      remotePort: port.port,
+      localPort,
+    })
   }
 
   return mappings
@@ -306,64 +159,50 @@ function computePortForwardMappings(
  * DevOrchestrator class
  */
 export class DevOrchestrator {
-  private readonly eventEmitter: OrchestratorEventEmitter
   private portForwardHandles: PortForwardHandle[] = []
   private devServerHandles: DevServerHandle[] = []
-  private serviceSwapHandles: ServiceSwapHandle[] = []
   private stopped = false
-
-  constructor(eventEmitter?: OrchestratorEventEmitter) {
-    this.eventEmitter = eventEmitter ?? createEventEmitter()
-  }
 
   /**
    * Start dev mode
    */
   dev(config: DevOrchestratorConfig): EitherAsync<DeployError, DevOrchestratorResult> {
     return EitherAsync(async ({ liftEither, throwE }) => {
-      const { rootPath, stackName, devServices: devServiceNames, onOutput } = config
+      const { rootPath, stackName, devServices: devServiceNames, onLog, onOutput } = config
+      const log = onLog ?? (() => {})
 
       // Check kubectl is available
       await liftEither(await checkKubectl())
 
-      // Check for stale state from previous crash and restore
-      const staleState = loadDevState(rootPath)
-      if (staleState) {
-        this.eventEmitter.emitLog('info', 'Cleaning up from previous dev session...')
-        await restoreFromStaleState(rootPath)
-      }
+      // Read root config for namespace and kubeContext
+      const rootConfig = readRootConfig(rootPath, stackName)
+      const namespace = rootConfig.namespace
+      const kubeContext = config.kubeContext ?? rootConfig.kubeContext
 
-      // Phase 1: Discover services
-      this.eventEmitter.emitPhaseStart('discovery')
+      // Discover services
+      log('Discovering services...')
       const allServices = await liftEither(await discoverServices(rootPath))
-      this.eventEmitter.emitPhaseComplete('discovery')
 
-      // Validate dev services exist
+      // Validate target services exist and have dev.command
       const serviceMap = new Map(allServices.map(s => [s.name, s]))
-      const devServices: DiscoveredService[] = []
+      const localServices: LocalDevService[] = []
+      let devPortCounter = DEV_SERVER_PORT_BASE
 
       for (const name of devServiceNames) {
         const service = serviceMap.get(name)
         if (!service) {
           return throwE(createDiscoveryError(
             'RootConfigNotFound',
-            `Service '${name}' not found. Available services: ${allServices.map(s => s.name).join(', ')}`,
+            `Service '${name}' not found. Available: ${allServices.map(s => s.name).join(', ')}`,
             rootPath
           ))
         }
-        devServices.push(service)
-      }
 
-      // Validate dev services have dev config
-      const localServices: LocalDevService[] = []
-      let devPortCounter = DEV_SERVER_PORT_BASE
-
-      for (const service of devServices) {
         const devConfig = getDevConfig(service)
-        if (!devConfig || !devConfig.command) {
+        if (!devConfig) {
           return throwE(createConfigError(
             'MissingRequiredField',
-            `Service '${service.name}' cannot run locally - missing 'dev.command' in pulumix.yaml. Add:\n\ndev:\n  command: npm run dev\n  port: 3000`,
+            `Service '${name}' missing 'dev.command' in pulumix.yaml. Add:\n\ndev:\n  command: npm run dev`,
             stackName,
             'dev.command'
           ))
@@ -372,148 +211,104 @@ export class DevOrchestrator {
         localServices.push({
           service,
           devConfig,
-          localPort: devConfig.port || devPortCounter++,
+          localPort: devConfig.port ?? devPortCounter++,
         })
       }
 
-      // Check for port conflicts among dev services
-      const portToService = new Map<number, string>()
-      for (const ls of localServices) {
-        const existing = portToService.get(ls.localPort)
-        if (existing) {
-          return throwE(createConfigError(
-            'InvalidConfigFormat',
-            `Port conflict: '${ls.service.name}' and '${existing}' both use port ${ls.localPort}. ` +
-            `Configure different ports in each service's dev.port setting.`,
-            stackName,
-            'dev.port'
-          ))
-        }
-        portToService.set(ls.localPort, ls.service.name)
-      }
-
-      // Compute cluster services (transitive deps minus dev services)
+      // Compute transitive dependencies (minus dev services themselves)
       const devServiceNamesSet = new Set(devServiceNames)
       const transitiveDeps = computeTransitiveDependencies(allServices, devServiceNames)
-      const clusterServiceNames = [...transitiveDeps].filter(name => !devServiceNamesSet.has(name))
-      const clusterServices = clusterServiceNames
-        .map(name => serviceMap.get(name))
-        .filter((s): s is DiscoveredService => s !== undefined)
+      const dependencyNames = [...transitiveDeps].filter(name => !devServiceNamesSet.has(name))
 
-      // Read namespace and baseDomain from root config
-      const rootConfigPath = `${rootPath}/pulumix.yaml`
-      let namespace = stackName
-      let baseDomain: string | undefined
-
+      // Create k8s clients and inspect cluster
+      log('Inspecting cluster...')
+      let clusterServices: ClusterServiceInfo[] = []
       try {
-        const rootConfigContent = fs.readFileSync(rootConfigPath, 'utf-8')
-        const rootConfig = yaml.parse(rootConfigContent) as Record<string, unknown>
-        const stacks = rootConfig.stacks as Record<string, Record<string, unknown>> | undefined
-        if (stacks?.[stackName]?.namespace) {
-          namespace = stacks[stackName].namespace as string
-        }
-        if (stacks?.[stackName]?.baseDomain) {
-          baseDomain = stacks[stackName].baseDomain as string
-        }
-      } catch {
-        // Fall back to stack name if root config can't be read
+        const k8s = createK8sClients(kubeContext)
+        clusterServices = await listNamespaceServices(k8s, namespace)
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err)
+        log(`Warning: Could not inspect cluster: ${message}`)
       }
 
-      // Try to get baseDomain from dev service config if not in root
-      if (!baseDomain && localServices.length > 0) {
-        const firstService = localServices[0].service
-        const stacks = firstService.rawConfig.stacks as Record<string, Record<string, unknown>> | undefined
-        const stackConfig = stacks?.[stackName]
-        if (stackConfig?.baseDomain) {
-          baseDomain = stackConfig.baseDomain as string
-        }
-      }
-
-      // Log cluster services that should be running
-      if (clusterServices.length > 0) {
-        this.eventEmitter.emitLog('info', `Cluster services (should already be deployed): ${clusterServiceNames.join(', ')}`)
-        this.eventEmitter.emitLog('info', `Run 'pulumix deploy ${stackName}' first if not already deployed`)
-      }
-
-      // Port-forwards (if any cluster services need them)
-      const portForwardMappings = computePortForwardMappings(clusterServices, namespace)
+      // Port-forward dependencies
+      const portForwardMappings = await buildPortForwardMappings(
+        clusterServices,
+        dependencyNames,
+        namespace
+      )
 
       if (portForwardMappings.length > 0) {
-        this.eventEmitter.emitTaskStart('port-forward', 'Setting up port-forwards...')
+        log(`Setting up port-forwards for: ${portForwardMappings.map(m => m.serviceName).join(', ')}`)
 
-        const pfResult = await startPortForwards(portForwardMappings)
+        const pfResult = await startPortForwards(portForwardMappings, kubeContext)
         if (pfResult.isLeft()) {
-          this.eventEmitter.emitTaskComplete('port-forward', false)
           return throwE(pfResult.extract() as DeployError)
         }
         this.portForwardHandles = pfResult.extract() as PortForwardHandle[]
 
-        this.eventEmitter.emitTaskComplete('port-forward', true)
+        for (const handle of this.portForwardHandles) {
+          log(`  ${handle.mapping.serviceName}:${handle.mapping.remotePort} -> localhost:${handle.mapping.localPort}`)
+        }
       }
 
-      // Phase 4: Build environment variables
-      const envs = buildAllDevEnvironments(localServices, portForwardMappings)
+      // Read deployment env vars from cluster and compute dev env for each target
+      const envs = new Map<string, Record<string, string>>()
+      const lookups = buildDependencyLookups(clusterServices, portForwardMappings)
+
+      let envK8s: ReturnType<typeof createK8sClients> | undefined
+      try {
+        envK8s = createK8sClients(kubeContext)
+      } catch {
+        log('Warning: Could not create k8s clients for env resolution')
+      }
+
+      for (const ls of localServices) {
+        let deploymentEnv: Record<string, string> = {}
+
+        if (envK8s) {
+          try {
+            deploymentEnv = await resolveDeploymentEnv(
+              envK8s,
+              namespace,
+              ls.service.name,
+              (msg) => log(`Warning: ${msg}`)
+            )
+          } catch {
+            log(`Warning: Could not read deployment env for '${ls.service.name}', using overrides only`)
+          }
+        }
+
+        const computed = computeDevEnvVars(deploymentEnv, lookups, ls.devConfig.env)
+
+        // Always set NODE_ENV
+        computed.NODE_ENV = computed.NODE_ENV ?? 'development'
+
+        envs.set(ls.service.name, computed)
+      }
 
       // Start local dev servers
       const devServerNames = localServices.map(s => s.service.name).join(', ')
-      this.eventEmitter.emitTaskStart('dev-server', `Starting ${devServerNames}...`)
+      log(`Starting dev servers: ${devServerNames}`)
 
       this.devServerHandles = runDevServers(
         localServices,
         envs,
         (serviceName, line) => {
-          // Prefix output with service name
           if (onOutput) {
             onOutput(`[${serviceName}] ${line}`)
           }
         }
       )
 
-      this.eventEmitter.emitTaskComplete('dev-server', true)
-
-      // Swap cluster services to point to local dev servers
-      const ingressUrls: string[] = []
-
-      if (baseDomain) {
-        for (const localService of localServices) {
-          // Only swap services that have running pods (not infrastructure)
-          if (!hasRunningPods(localService.service)) {
-            continue
-          }
-
-          const taskId = `swap-${localService.service.name}`
-          this.eventEmitter.emitTaskStart(taskId, `Swapping ${localService.service.name} to local...`)
-
-          const swapResult = await swapServiceToLocal(
-            localService.service.name,
-            namespace,
-            localService.localPort,
-            rootPath
-          )
-
-          if (swapResult.isLeft()) {
-            // Log warning but continue - swap is optional enhancement
-            this.eventEmitter.emitTaskComplete(taskId, false, true) // skipped=true
-          } else {
-            this.serviceSwapHandles.push(swapResult.extract() as ServiceSwapHandle)
-            const ingressUrl = `http://${localService.service.name}.${baseDomain}`
-            ingressUrls.push(ingressUrl)
-            this.eventEmitter.emitTaskComplete(taskId, true)
-          }
-        }
-      }
-
       return {
         success: true,
         stack: stackName,
         namespace,
-        baseDomain,
         devServices: localServices,
         portForwards: portForwardMappings,
         devServerHandles: this.devServerHandles,
         portForwardHandles: this.portForwardHandles,
-        serviceSwapHandles: this.serviceSwapHandles,
-        ingressUrls,
       }
     })
   }
@@ -527,15 +322,6 @@ export class DevOrchestrator {
 
     // Stop dev servers first
     stopDevServers(this.devServerHandles)
-
-    // Restore service swaps (scale up, restore selector)
-    for (const handle of this.serviceSwapHandles) {
-      try {
-        await handle.restore()
-      } catch (err) {
-        console.error(`Failed to restore ${handle.serviceName}:`, err)
-      }
-    }
 
     // Then stop port-forwards
     stopPortForwards(this.portForwardHandles)
