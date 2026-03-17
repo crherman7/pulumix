@@ -5,7 +5,6 @@
   "description": "Hello World HTTP service",
   "main": "pulumix.ts",
   "dependencies": {
-    "@pulumix/core": "workspace:*",
-    "@pulumix/k8s-platform": "workspace:*"
+    "@pulumix/core": "workspace:*"
   }
 }

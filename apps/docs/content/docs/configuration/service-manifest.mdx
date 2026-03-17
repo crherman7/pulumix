@@ -3,7 +3,7 @@ title: Service Manifest
 description: Service pulumix.yaml configuration
 ---
 
-Each service has a `pulumix.yaml` manifest defining its metadata, observability settings, and stack-specific configuration.
+Each service has a `pulumix.yaml` manifest defining its metadata and stack-specific configuration.
 
 ## Full Example
 
@@ -11,31 +11,10 @@ Each service has a `pulumix.yaml` manifest defining its metadata, observability 
 metadata:
   name: my-api
   version: 1.0.0
-  description: My API service
-  team: backend
-  owner: backend@company.com
-  tags:
-    tier: api
-    criticality: high
 
-observability:
-  health:
-    endpoint: /health
-    port: 3000
-  metrics:
-    endpoint: /metrics
-    format: prometheus
-  logs:
-    format: json
-    level: info
-
-# Local development configuration
-dev:
-  command: npm run dev
-  port: 3000
-  cwd: src
-  env:
-    NODE_ENV: development
+build:
+  context: root
+  dockerfile: services/my-api/Dockerfile
 
 stacks:
   local:
@@ -51,72 +30,31 @@ stacks:
 
 ### `metadata`
 
-Service identification and ownership information.
+Service identification.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Service name (must match package.json name) |
+| `name` | Yes | Service name (lowercase alphanumeric with hyphens) |
 | `version` | Yes | Semantic version |
-| `description` | No | Human-readable description |
-| `team` | No | Owning team name |
-| `owner` | No | Owner email or contact |
-| `tags` | No | Key-value labels for categorization |
 
-### `observability`
+### `build`
 
-Observability configuration for health checks, metrics, and logging.
+Docker build configuration. Optional — only needed when the build context differs from the service directory.
 
-#### `observability.health`
-
-```yaml
-observability:
-  health:
-    endpoint: /health    # Health check path
-    port: 3000           # Health check port
-```
-
-#### `observability.metrics`
+| Field | Default | Description |
+|-------|---------|-------------|
+| `context` | `.` | Build context (`root` for project root, `.` for service directory, or relative path) |
+| `dockerfile` | `Dockerfile` | Path to Dockerfile relative to build context |
 
 ```yaml
-observability:
-  metrics:
-    endpoint: /metrics   # Metrics endpoint
-    format: prometheus   # Metrics format
-```
-
-#### `observability.logs`
-
-```yaml
-observability:
-  logs:
-    format: json         # Log format (json, text)
-    level: info          # Log level
-```
-
-### `dev`
-
-Local development configuration for `pulumix dev` command.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `command` | Yes | Command to run locally (e.g., `npm run dev`) |
-| `port` | Yes | Dev server port |
-| `cwd` | No | Working directory relative to service root |
-| `env` | No | Additional environment variables |
-
-```yaml
-dev:
-  command: npm run dev
-  port: 3000
-  cwd: src
-  env:
-    NODE_ENV: development
-    DEBUG: "app:*"
+build:
+  context: root
+  dockerfile: services/my-api/Dockerfile
 ```
 
 ### `stacks`
 
-Per-stack configuration overrides. Each key matches a Pulumi stack name.
+Per-stack configuration. Each key matches a Pulumi stack name. Values are passed to your `pulumix.ts` via `ctx.config`.
 
 ```yaml
 stacks:
@@ -127,19 +65,22 @@ stacks:
   production:
     replicas: 10
     baseDomain: 'api.company.com'
-    resources:
-      cpu: "500m"
-      memory: "512Mi"
 ```
 
-Stack configuration is available in `pulumix.ts` via `ctx.config`.
+Access in `pulumix.ts`:
+
+```typescript
+const replicas = ctx.config.replicas as number
+const baseDomain = ctx.config.baseDomain as string
+```
 
 ## Minimal Example
-
-For simple services, only `metadata` is required:
 
 ```yaml title="pulumix.yaml"
 metadata:
   name: my-service
   version: 1.0.0
+
+stacks:
+  local: {}
 ```

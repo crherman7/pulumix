@@ -30,5 +30,3 @@ export * from './docker'
 // Kubernetes cluster inspection
 export * from './k8s'
 
-// Dev mode
-export * from './dev'

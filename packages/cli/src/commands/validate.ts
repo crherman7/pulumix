@@ -3,10 +3,11 @@
  */
 
 import chalk from 'chalk'
-import { discoverServices, discoverPublishedServices, validateServiceManifest, formatError } from '@pulumix/core'
+import { validateServiceManifest, formatError } from '@pulumix/core'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as yaml from 'yaml'
+import { discoverAllServices } from '../utils/discover'
 
 export interface ValidateCommandOptions {
   readonly path?: string
@@ -24,20 +25,17 @@ export async function validateCommand(options: ValidateCommandOptions): Promise<
   console.log(chalk.dim(rootPath))
   console.log('')
 
-  // Load root config
-  const rootConfigPath = path.join(rootPath, 'pulumix.yaml')
-  let allowlist: string[] = []
   let hasErrors = false
 
   // Validate root config
   console.log(chalk.bold('Root Configuration'))
+  const rootConfigPath = path.join(rootPath, 'pulumix.yaml')
   if (!fs.existsSync(rootConfigPath)) {
     console.log(`  ${chalk.red('✗')} pulumix.yaml not found`)
     hasErrors = true
   } else {
     try {
-      const rootConfig = yaml.parse(fs.readFileSync(rootConfigPath, 'utf-8'))
-      allowlist = rootConfig?.services?.allowed ?? []
+      yaml.parse(fs.readFileSync(rootConfigPath, 'utf-8'))
       console.log(`  ${chalk.green('✓')} pulumix.yaml is valid`)
     } catch (err: any) {
       console.log(`  ${chalk.red('✗')} pulumix.yaml has errors`)
@@ -48,27 +46,24 @@ export async function validateCommand(options: ValidateCommandOptions): Promise<
   console.log('')
 
   // Discover and validate services
-  const localResult = await discoverServices(rootPath)
-  const publishedResult = await discoverPublishedServices(rootPath, allowlist)
+  const result = await discoverAllServices(rootPath).run()
 
-  if (localResult.isLeft() || publishedResult.isLeft()) {
+  if (result.isLeft()) {
     console.error(chalk.red('Failed to discover services'))
     process.exit(1)
   }
 
-  const localServices = localResult.unsafeCoerce()
-  const publishedServices = publishedResult.unsafeCoerce()
-  const allServices = [...localServices, ...publishedServices]
+  const { allServices } = result.unsafeCoerce()
 
   console.log(chalk.bold('Service Configurations'))
 
   for (const service of allServices) {
     // Re-validate manifest (discovery already validates, but let's be explicit)
     const manifest = yaml.parse(fs.readFileSync(service.configPath, 'utf-8'))
-    const result = validateServiceManifest(manifest, service.configPath)
+    const validationResult = validateServiceManifest(manifest, service.configPath)
 
-    if (result.isLeft()) {
-      const error = result.extract()
+    if (validationResult.isLeft()) {
+      const error = validationResult.extract()
       console.log(`  ${chalk.red('✗')} ${service.name}`)
       if (options.verbose) {
         console.log(chalk.dim(formatError(error)))

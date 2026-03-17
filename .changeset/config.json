@@ -3,7 +3,7 @@
   "changelog": "@changesets/cli/changelog",
   "commit": false,
   "fixed": [],
-  "linked": [["@pulumix/core", "@pulumix/cli", "@pulumix/k8s-platform"]],
+  "linked": [["@pulumix/core", "@pulumix/cli"]],
   "access": "public",
   "baseBranch": "develop",
   "updateInternalDependencies": "patch",

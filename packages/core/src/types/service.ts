@@ -6,7 +6,7 @@
  */
 
 import * as pulumi from '@pulumi/pulumi'
-import type { ServiceMetadata, ObservabilityConfig, SecurityConfig, BuildConfig } from './manifest'
+import type { ServiceMetadata, BuildConfig } from './manifest'
 
 /**
  * Configuration passed to a service's deploy function.
@@ -67,10 +67,6 @@ export interface ServiceContext<TDeps = Record<string, Record<string, unknown>>>
   readonly serviceName: string
   /** Service metadata from deploy.yaml */
   readonly metadata: ServiceMetadata
-  /** Observability configuration */
-  readonly observability?: ObservabilityConfig
-  /** Security configuration */
-  readonly security?: SecurityConfig
   /** Stack-scoped config from deploy.yaml */
   readonly config: Record<string, unknown>
   /** Global config from root deploy.yaml (e.g., globalConfig.namespace) */
@@ -204,10 +200,6 @@ export interface DiscoveredService {
   readonly metadata: ServiceMetadata
   /** Docker build configuration */
   readonly build?: BuildConfig
-  /** Observability configuration */
-  readonly observability?: ObservabilityConfig
-  /** Security configuration */
-  readonly security?: SecurityConfig
 }
 
 /**

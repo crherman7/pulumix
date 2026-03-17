@@ -322,7 +322,6 @@ Pulumix scans `node_modules` and deploys published services alongside local ones
 | Smart Docker Builds | Content-hash caching, digest-pinned images, deterministic deploys. |
 | Security Allowlist | Control which published services can execute (`@platform/*`). |
 | Standard Metadata | Ownership, SLAs, observability, and other service metadata. |
-| Local Dev with HMR | Run services locally while dependencies run in-cluster. |
 | Stack Configuration | Per-environment config (dev, staging, prod) in `pulumix.yaml`. |
 | Lifecycle Hooks | Script `pre-build`/`post-build`/`pre-deploy`/`post-deploy`. |
 | Built on Pulumi | Full access to Pulumi SDK across clouds and providers. |
@@ -369,41 +368,6 @@ Deploy
 ```
 
 Visit: http://hello-world.127.0.0.1.sslip.io/
-
-### Local Development
-
-Run hello-world locally with HMR while the ingress routes to your machine:
-
-```bash
-cd apps/example
-pnpm run dev local hello-world
-```
-
-```
-pulumix dev
-/path/to/apps/example
-
-Configuration
-  Stack:        local
-  Dev Services: hello-world
-
-Discovery
-  └─ hello-world (local)
-
-Dev Mode Active
-
-  Dev Servers:
-    + hello-world -> http://localhost:3000
-
-  Ingress URLs (routed to local):
-    + http://hello-world.127.0.0.1.sslip.io
-
-Press Ctrl+C to stop
-
-  [hello-world] Server running on port 3000
-```
-
-Edit files and see changes instantly at http://hello-world.127.0.0.1.sslip.io/
 
 ---
 
@@ -632,31 +596,6 @@ Hooks keep Pulumix infrastructure-agnostic. The core orchestrator doesn't know a
 metadata:
   name: my-api
   version: 1.0.0
-  description: My API service
-  team: backend
-  owner: backend@company.com
-  tags:
-    tier: api
-    criticality: high
-
-observability:
-  health:
-    endpoint: /health
-    port: 3000
-  metrics:
-    endpoint: /metrics
-    format: prometheus
-  logs:
-    format: json
-    level: info
-
-# Local development configuration
-dev:
-  command: npm run dev    # Command to run locally
-  port: 3000              # Dev server port
-  cwd: src                # Working directory (optional)
-  env:                    # Additional env vars (optional)
-    NODE_ENV: development
 
 stacks:
   local:
@@ -694,83 +633,6 @@ pulumix deploy local -s provider,api
 
 # Deploy from different directory
 pulumix deploy production -p ./infra
-```
-
-### Dev
-
-```bash
-pulumix dev <stack> <services> [options]
-```
-
-Run services locally with hot module replacement while dependencies run in the cluster. The cluster's ingress URL routes to your local machine for full-stack development.
-
-**Arguments:**
-- `<stack>` - Stack name (e.g., `local`)
-- `<services>` - Comma-separated list of services to run locally
-
-**Options:**
-- `-p, --path <path>` - Project root (default: cwd)
-- `-v, --verbose` - Verbose output
-
-**Examples:**
-
-```bash
-# Single service dev
-pulumix dev local web-app
-
-# Multiple services (full-stack dev)
-pulumix dev local web-app,api
-
-# From different directory
-pulumix dev local hello-world -p ./apps/example
-```
-
-**How it works:**
-
-1. Discovers all services and their dependencies
-2. Computes which services run locally vs in cluster
-3. Sets up port-forwards to cluster services (databases, etc.)
-4. Scales down cluster deployments for dev services
-5. Patches Kubernetes Services to route to your local machine
-6. Starts local dev servers with injected environment variables
-7. Traffic to ingress URLs now hits your local dev server
-
-**Example output:**
-
-```
-pulumix dev
-/path/to/project
-
-Configuration
-  Stack:        local
-  Dev Services: hello-world
-
-Discovery
-  └─ hello-world (local)
-
-Dev Mode Active
-
-  Port Forwards:
-    + postgres:5432 -> localhost:5432
-
-  Dev Servers:
-    + hello-world -> http://localhost:3000
-
-  Ingress URLs (routed to local):
-    + http://hello-world.127.0.0.1.sslip.io
-
-Press Ctrl+C to stop
-```
-
-**Requirements:**
-
-Services must have a `dev` section in their `pulumix.yaml`:
-
-```yaml
-dev:
-  command: npm run dev    # Command to run locally
-  port: 3000              # Dev server port
-  cwd: src                # Working directory (optional)
 ```
 
 ### Destroy

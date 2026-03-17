@@ -3,10 +3,8 @@
  */
 
 import chalk from 'chalk'
-import { discoverServices, discoverPublishedServices } from '@pulumix/core'
 import * as path from 'path'
-import * as fs from 'fs'
-import * as yaml from 'yaml'
+import { discoverAllServices } from '../utils/discover'
 
 export interface ListCommandOptions {
   readonly path?: string
@@ -25,31 +23,14 @@ export async function listCommand(options: ListCommandOptions): Promise<void> {
   console.log(chalk.dim(rootPath))
   console.log('')
 
-  // Load root config for allowlist
-  const rootConfigPath = path.join(rootPath, 'pulumix.yaml')
-  let allowlist: string[] = []
+  const result = await discoverAllServices(rootPath).run()
 
-  if (fs.existsSync(rootConfigPath)) {
-    const rootConfig = yaml.parse(fs.readFileSync(rootConfigPath, 'utf-8'))
-    allowlist = rootConfig?.services?.allowed ?? []
-  }
-
-  // Discover services
-  const localResult = await discoverServices(rootPath)
-  const publishedResult = await discoverPublishedServices(rootPath, allowlist)
-
-  if (localResult.isLeft()) {
-    console.error(chalk.red(`Error discovering services: ${localResult.extract().message}`))
+  if (result.isLeft()) {
+    console.error(chalk.red(`Error: ${result.extract().message}`))
     process.exit(1)
   }
 
-  if (publishedResult.isLeft()) {
-    console.error(chalk.red(`Error discovering published services: ${publishedResult.extract().message}`))
-    process.exit(1)
-  }
-
-  const localServices = localResult.unsafeCoerce()
-  const publishedServices = publishedResult.unsafeCoerce()
+  const { localServices, publishedServices } = result.unsafeCoerce()
 
   // JSON output
   if (options.json) {
@@ -70,10 +51,6 @@ export async function listCommand(options: ListCommandOptions): Promise<void> {
         : ''
 
       console.log(`  ${chalk.cyan(service.name)} ${version}${deps}`)
-
-      if (options.verbose && service.metadata.description) {
-        console.log(`     ${chalk.dim(service.metadata.description)}`)
-      }
     }
     console.log('')
   }
@@ -87,10 +64,6 @@ export async function listCommand(options: ListCommandOptions): Promise<void> {
         : ''
 
       console.log(`  ${chalk.cyan(service.name)} ${version}${deps}`)
-
-      if (options.verbose && service.metadata.description) {
-        console.log(`     ${chalk.dim(service.metadata.description)}`)
-      }
     }
     console.log('')
   }

@@ -31,14 +31,12 @@ import {
 } from '../types/service'
 import type {
   ServiceMetadata,
-  ObservabilityConfig,
-  SecurityConfig,
   BuildConfig,
   BackendConfig,
   ProjectConfig
 } from '../types/manifest'
 import { executeHooksForStage, getHooksForStack } from './hooks'
-import { LocalWorkspace } from '@pulumi/pulumi/automation'
+import { LocalWorkspace, Stack } from '@pulumi/pulumi/automation'
 import {
   hashBuildContext,
   imageExistsInRegistry,
@@ -184,6 +182,50 @@ const resolveWorkDir = (
 }
 
 // ============================================================================
+// Types - Workspace Configuration
+// ============================================================================
+
+interface WorkspaceConfig {
+  readonly stack: Stack
+  readonly rootConfig: ProjectConfig
+  readonly projectName: string
+}
+
+// ============================================================================
+// Pure Functions - Workspace Setup
+// ============================================================================
+
+/**
+ * Load config and create Pulumi workspace stack.
+ * Pure function that composes with EitherAsync.
+ */
+const createWorkspaceStack = (
+  config: OrchestratorConfig,
+  program: () => Promise<void | Record<string, unknown>>
+): EitherAsync<DeployError, WorkspaceConfig> =>
+  EitherAsync(async ({ liftEither }) => {
+    const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
+    const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
+    const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
+
+    const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
+    const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
+
+    if (!fs.existsSync(workDir)) {
+      fs.mkdirSync(workDir, { recursive: true })
+    }
+
+    const projectName = rootConfig.name ?? 'pulumix-project'
+
+    const stack = await LocalWorkspace.createOrSelectStack(
+      { stackName: config.stackName, projectName, program },
+      { workDir, projectSettings: { name: projectName, runtime: 'nodejs' as const, backend: { url: backendUrl } } }
+    )
+
+    return { stack, rootConfig, projectName }
+  })
+
+// ============================================================================
 // Pure Functions - YAML Parsing
 // ============================================================================
 
@@ -233,16 +275,7 @@ const parseServiceMetadata = (rawConfig: Record<string, unknown>, serviceName: s
 
   return {
     name: (metadata.name as string) ?? serviceName,
-    version: (metadata.version as string) ?? '0.0.0',
-    description: metadata.description as string | undefined,
-    team: metadata.team as string | undefined,
-    owner: metadata.owner as string | undefined,
-    repository: metadata.repository as string | undefined,
-    documentation: metadata.documentation as string | undefined,
-    tags: metadata.tags as Record<string, string> | undefined,
-    sla: metadata.sla as any,
-    support: metadata.support as any,
-    contract: metadata.contract as any
+    version: (metadata.version as string) ?? '0.0.0'
   }
 }
 
@@ -361,8 +394,6 @@ export const discoverServices = async (rootPath: string): Promise<Either<DeployE
       const rawConfig = configResult.unsafeCoerce()
       const metadata = parseServiceMetadata(rawConfig, path.basename(servicePath))
       const build = rawConfig.build as BuildConfig | undefined
-      const observability = rawConfig.observability as ObservabilityConfig | undefined
-      const security = rawConfig.security as SecurityConfig | undefined
 
       // Read dependencies from package.json
       const dependencies = extractDependenciesFromPackageJson(packageJsonPath, serviceNames)
@@ -376,9 +407,7 @@ export const discoverServices = async (rootPath: string): Promise<Either<DeployE
         hasDockerfile: fs.existsSync(dockerPath),
         rawConfig,
         metadata,
-        build,
-        observability,
-        security
+        build
       })
     }
 
@@ -506,8 +535,6 @@ export const discoverPublishedServices = async (
       const rawConfig = configResult.unsafeCoerce()
       const metadata = parseServiceMetadata(rawConfig, path.basename(servicePath))
       const build = rawConfig.build as BuildConfig | undefined
-      const observability = rawConfig.observability as ObservabilityConfig | undefined
-      const security = rawConfig.security as SecurityConfig | undefined
 
       const dependencies = extractDependenciesFromPackageJson(packageJsonPath, serviceNames)
 
@@ -520,9 +547,7 @@ export const discoverPublishedServices = async (
         hasDockerfile: fs.existsSync(dockerPath),
         rawConfig,
         metadata,
-        build,
-        observability,
-        security
+        build
       })
     }
 
@@ -1025,8 +1050,6 @@ export class Orchestrator {
           stackName: config.stackName,
           serviceName: service.name,
           metadata: service.metadata,
-          observability: service.observability,
-          security: service.security,
           config: resolved.stackConfig,
           globalConfig,
           dependencies: outputs,
@@ -1182,34 +1205,16 @@ export class Orchestrator {
    * Show current stack outputs without deploying
    */
   status(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
-    return EitherAsync(async ({ liftEither }) => {
-      await liftEither(this.validateEnvironment(config.stackName))
+    return EitherAsync.liftEither(this.validateEnvironment(config.stackName))
+      .chain(() => createWorkspaceStack(config, async () => {}))
+      .chain(async ({ stack }) => {
+        const stackOutputs = await stack.outputs()
+        const outputs = Object.fromEntries(
+          Object.entries(stackOutputs).map(([k, v]) => [k, v.value])
+        ) as Record<string, Record<string, unknown>>
 
-      const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
-      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
-
-      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
-      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
-
-      if (!fs.existsSync(workDir)) {
-        fs.mkdirSync(workDir, { recursive: true })
-      }
-
-      const projectName = rootConfig.name ?? 'pulumix-project'
-
-      const stack = await LocalWorkspace.createOrSelectStack(
-        { stackName: config.stackName, projectName, program: async () => {} },
-        { workDir, projectSettings: { name: projectName, runtime: 'nodejs' as const, backend: { url: backendUrl } } }
-      )
-
-      const stackOutputs = await stack.outputs()
-      const outputs = Object.fromEntries(
-        Object.entries(stackOutputs).map(([k, v]) => [k, v.value])
-      ) as Record<string, Record<string, unknown>>
-
-      return { success: true, stack: config.stackName, servicesDeployed: 0, duration: 0, outputs }
-    })
+        return Right({ success: true, stack: config.stackName, servicesDeployed: 0, duration: 0, outputs })
+      })
   }
 
   /**
@@ -1217,42 +1222,23 @@ export class Orchestrator {
    */
   refresh(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
     const startTime = Date.now()
+    const emitter = this.eventEmitter
 
-    return EitherAsync(async ({ liftEither }) => {
-      await liftEither(this.validateEnvironment(config.stackName))
+    return EitherAsync.liftEither(this.validateEnvironment(config.stackName))
+      .chain(() => createWorkspaceStack(config, async () => {}))
+      .chain(async ({ stack }) => {
+        await stack.refresh({
+          onOutput: config.onOutput || ((msg) => emitter.emitLog('info', msg, undefined, 'Deploy')),
+        })
 
-      const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
-      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
-
-      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
-      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
-
-      if (!fs.existsSync(workDir)) {
-        fs.mkdirSync(workDir, { recursive: true })
-      }
-
-      const projectName = rootConfig.name ?? 'pulumix-project'
-
-      const program = async (): Promise<void> => {}
-
-      const stack = await LocalWorkspace.createOrSelectStack(
-        { stackName: config.stackName, projectName, program },
-        { workDir, projectSettings: { name: projectName, runtime: 'nodejs' as const, backend: { url: backendUrl } } }
-      )
-
-      await stack.refresh({
-        onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
+        return Right({
+          success: true,
+          stack: config.stackName,
+          servicesDeployed: 0,
+          duration: Date.now() - startTime,
+          outputs: {}
+        })
       })
-
-      return {
-        success: true,
-        stack: config.stackName,
-        servicesDeployed: 0,
-        duration: Date.now() - startTime,
-        outputs: {}
-      }
-    })
   }
 
   /**
@@ -1260,60 +1246,23 @@ export class Orchestrator {
    */
   destroy(config: OrchestratorConfig): EitherAsync<DeployError, OrchestratorResult> {
     const startTime = Date.now()
+    const emitter = this.eventEmitter
 
-    return EitherAsync(async ({ liftEither }) => {
-      // Validate environment
-      await liftEither(this.validateEnvironment(config.stackName))
+    return EitherAsync.liftEither(this.validateEnvironment(config.stackName))
+      .chain(() => createWorkspaceStack(config, async () => {}))
+      .chain(async ({ stack }) => {
+        await stack.destroy({
+          onOutput: config.onOutput || ((msg) => emitter.emitLog('info', msg, undefined, 'Deploy')),
+        })
 
-      // Load and validate root config
-      const rootConfigPath = path.join(config.rootPath, 'pulumix.yaml')
-      const rawConfig = await liftEither(parseYamlFile(rootConfigPath))
-      const rootConfig = await liftEither(validateProjectConfig(rawConfig, rootConfigPath))
-
-      // Resolve backend configuration
-      const backendUrl = resolveBackendUrl(config.rootPath, rootConfig, config.stackName)
-      const workDir = resolveWorkDir(config.rootPath, rootConfig, config.stackName)
-
-      if (!fs.existsSync(workDir)) {
-        fs.mkdirSync(workDir, { recursive: true })
-      }
-
-      const projectName = rootConfig.name ?? 'pulumix-project'
-
-      // Create empty program for destroy
-      const program = async (): Promise<void> => {
-        // Empty - Pulumi will destroy existing resources
-      }
-
-      const stack = await LocalWorkspace.createOrSelectStack(
-        {
-          stackName: config.stackName,
-          projectName,
-          program
-        },
-        {
-          workDir,
-          projectSettings: {
-            name: projectName,
-            runtime: 'nodejs' as const,
-            backend: { url: backendUrl }
-          }
-        }
-      )
-
-      // Simple approach: just use onOutput with the provided logger
-      await stack.destroy({
-        onOutput: config.onOutput || ((msg) => this.eventEmitter.emitLog('info', msg, undefined, 'Deploy')),
+        return Right({
+          success: true,
+          stack: config.stackName,
+          servicesDeployed: 0,
+          duration: Date.now() - startTime,
+          outputs: {}
+        })
       })
-
-      return {
-        success: true,
-        stack: config.stackName,
-        servicesDeployed: 0,
-        duration: Date.now() - startTime,
-        outputs: {}
-      }
-    })
   }
 }
 

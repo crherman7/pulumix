@@ -1,5 +1,57 @@
 # @pulumix/cli
 
+## 0.13.0
+
+### Patch Changes
+
+- Refactor codebase with functional programming patterns
+
+  **@pulumix/core:**
+
+  - Add `createValidator` higher-order function factory for type-safe JSON schema validation
+  - Add `createWorkspaceStack` pure function for EitherAsync composition in orchestrator
+  - Refactor `status()`, `refresh()`, `destroy()` methods to use EitherAsync chain composition
+  - Reduce code duplication in validation modules (manifest.ts, project.ts)
+
+  **@pulumix/cli:**
+
+  - Add shared `discoverAllServices` utility using EitherAsync for composable error handling
+  - Refactor `list`, `inspect`, and `validate` commands to use shared discovery
+  - Add `createTypedSubscriber` higher-order function in event-bus for DRY event subscriptions
+  - Add `purify-ts` dependency for functional programming patterns
+
+- Updated dependencies
+  - @pulumix/core@0.13.0
+
+## 0.12.0
+
+### Minor Changes
+
+- Replace local dev runners with in-cluster dev pods:
+
+  - Add `DevPodManager` that creates dev pods inheriting deployment env, labels, and service account for native cluster DNS access
+  - Scale down target deployments and replace with dev pods running synced local code
+  - Port-forward dev pod ports to localhost for local browser access
+  - Remove `local-runner.ts` and `env-compute.ts` in favor of the dev-pod approach
+  - Update CLI dev command output to show dev pod status and manual cleanup hints
+  - Add k8s helpers for deployment discovery, pod creation, and scaling
+
+### Patch Changes
+
+- Updated dependencies
+  - @pulumix/core@0.12.0
+
+## 0.11.0
+
+### Minor Changes
+
+- Add imagePullSecrets, initContainers, env valueFrom (secretKeyRef, configMapKeyRef, fieldRef), TLS without cert-manager (tlsSecretName), and pulumi.Input<string> support for command/args
+
+### Patch Changes
+
+- Updated dependencies
+  - @pulumix/core@0.11.0
+
 ## 0.10.0
 
 ### Minor Changes

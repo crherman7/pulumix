@@ -1,45 +1,22 @@
 metadata:
   name: hello-world
   version: 1.0.0
-  description: Hello World HTTP service
-  team: platform
-  owner: platform@example.com
-
-observability:
-  health:
-    endpoint: /health
-    port: 3000
-  metrics:
-    endpoint: /metrics
-    port: 3000
-    format: prometheus
-  logs:
-    format: json
-    level: info
-
-dev:
-  command: node --watch index.js
 
 stacks:
   local:
-    replicas: 2
     baseDomain: '127.0.0.1.sslip.io'
     ingressClassName: 'traefik'
     env:
       NODE_ENV: development
 
   staging:
-    replicas: 3
     baseDomain: 'staging.example.com'
     ingressClassName: 'nginx'
-    tlsIssuer: 'letsencrypt-prod'
     env:
       NODE_ENV: staging
 
   production:
-    replicas: 5
     baseDomain: 'example.com'
     ingressClassName: 'nginx'
-    tlsIssuer: 'letsencrypt-prod'
     env:
       NODE_ENV: production

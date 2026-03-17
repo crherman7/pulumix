@@ -64,6 +64,40 @@ export const extractDockerfilePaths = async (
   return paths
 }
 
+/**
+ * Parse the base image from a Dockerfile's first FROM instruction.
+ *
+ * Returns the image:tag string (e.g., "node:20-alpine"), or null if:
+ * - File doesn't exist or has no FROM instruction
+ * - The image reference is an ARG variable ($...)
+ *
+ * @param dockerfilePath - Absolute path to the Dockerfile
+ * @returns Base image string or null
+ */
+export async function parseBaseImage(dockerfilePath: string): Promise<string | null> {
+  let content: string
+  try {
+    content = await fs.promises.readFile(dockerfilePath, 'utf-8')
+  } catch {
+    return null
+  }
+
+  const dockerfile = DockerfileParser.parse(content)
+  const froms = dockerfile.getFROMs()
+
+  if (froms.length === 0) return null
+
+  const firstFrom = froms[0]!
+  const image = firstFrom.getImage()
+
+  if (!image || image.startsWith('$')) {
+    return null
+  }
+
+  // getImage() already includes the tag (e.g., "node:18-alpine")
+  return image
+}
+
 // ============================================================================
 // Dockerignore Support
 // ============================================================================

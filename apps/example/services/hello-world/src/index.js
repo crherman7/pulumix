@@ -24,7 +24,7 @@ app.get("/", (req, res) => {
     message: "Hello from Pulumix!",
     hostname: os.hostname(),
     environment: process.env.NODE_ENV || "development",
-    version: process.env.APP_VERSION || "1.0.1",
+    version: process.env.APP_VERSION || "1.0.0",
     timestamp: new Date().toISOString(),
   };
 
@@ -45,7 +45,7 @@ app.get("/info", (req, res) => {
 });
 
 // Start server
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Hello World app listening on port ${port}`);
   console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`Hostname: ${os.hostname()}`);

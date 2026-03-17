@@ -45,84 +45,59 @@ export class DeploymentEventBus {
   }
 
   /**
+   * Higher-order function that creates a typed event subscriber.
+   * Encapsulates the RxJS filter and subscription pattern.
+   */
+  private createTypedSubscriber<T extends DeploymentEvent['type']>(
+    eventType: T
+  ): (handler: (event: Extract<DeploymentEvent, { type: T }>) => void) => () => void {
+    return (handler) => {
+      const subscription = this.subject
+        .pipe(filter((e): e is Extract<DeploymentEvent, { type: T }> => e.type === eventType))
+        .subscribe(handler)
+      return () => subscription.unsubscribe()
+    }
+  }
+
+  /**
    * Subscribe to phase start events
    */
-  onPhaseStart(handler: (event: Extract<DeploymentEvent, { type: 'PhaseStart' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'PhaseStart' }> => e.type === 'PhaseStart'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onPhaseStart = this.createTypedSubscriber('PhaseStart')
 
   /**
    * Subscribe to phase complete events
    */
-  onPhaseComplete(handler: (event: Extract<DeploymentEvent, { type: 'PhaseComplete' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'PhaseComplete' }> => e.type === 'PhaseComplete'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onPhaseComplete = this.createTypedSubscriber('PhaseComplete')
 
   /**
    * Subscribe to phase progress events
    */
-  onPhaseProgress(handler: (event: Extract<DeploymentEvent, { type: 'PhaseProgress' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'PhaseProgress' }> => e.type === 'PhaseProgress'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onPhaseProgress = this.createTypedSubscriber('PhaseProgress')
 
   /**
    * Subscribe to task start events
    */
-  onTaskStart(handler: (event: Extract<DeploymentEvent, { type: 'TaskStart' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'TaskStart' }> => e.type === 'TaskStart'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onTaskStart = this.createTypedSubscriber('TaskStart')
 
   /**
    * Subscribe to task update events
    */
-  onTaskUpdate(handler: (event: Extract<DeploymentEvent, { type: 'TaskUpdate' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'TaskUpdate' }> => e.type === 'TaskUpdate'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onTaskUpdate = this.createTypedSubscriber('TaskUpdate')
 
   /**
    * Subscribe to task complete events
    */
-  onTaskComplete(handler: (event: Extract<DeploymentEvent, { type: 'TaskComplete' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'TaskComplete' }> => e.type === 'TaskComplete'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onTaskComplete = this.createTypedSubscriber('TaskComplete')
 
   /**
    * Subscribe to diagnostic events (logs)
    */
-  onDiagnostic(handler: (event: Extract<DeploymentEvent, { type: 'Diagnostic' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'Diagnostic' }> => e.type === 'Diagnostic'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onDiagnostic = this.createTypedSubscriber('Diagnostic')
 
   /**
    * Subscribe to resource events
    */
-  onResource(handler: (event: Extract<DeploymentEvent, { type: 'Resource' }>) => void): () => void {
-    const subscription = this.subject
-      .pipe(filter((e): e is Extract<DeploymentEvent, { type: 'Resource' }> => e.type === 'Resource'))
-      .subscribe(handler)
-    return () => subscription.unsubscribe()
-  }
+  onResource = this.createTypedSubscriber('Resource')
 
   /**
    * Close the event bus

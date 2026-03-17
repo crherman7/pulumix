@@ -22,7 +22,6 @@ npx @pulumix/cli deploy local
 | Command | Description |
 |---------|-------------|
 | [`deploy`](/docs/cli/deploy) | Deploy services to a stack |
-| [`dev`](/docs/cli/dev) | Run services locally with HMR |
 | [`destroy`](/docs/cli/destroy) | Destroy a stack |
 
 ## Global Options
@@ -41,9 +40,6 @@ pulumix deploy local
 
 # Deploy specific services
 pulumix deploy local -s provider,api
-
-# Run services locally with hot reload
-pulumix dev local web-app,api
 
 # Destroy a stack
 pulumix destroy local -y

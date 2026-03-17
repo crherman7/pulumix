@@ -1,4 +1,4 @@
 {
   "title": "CLI Reference",
-  "pages": ["index", "deploy", "dev", "destroy"]
+  "pages": ["index", "deploy", "destroy"]
 }
